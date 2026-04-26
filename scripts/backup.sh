@@ -7,12 +7,25 @@
 # =====================================================================
 set -euo pipefail
 
+REQUESTED_BACKUP_TYPE="${BACKUP_TYPE:-}"
+REQUESTED_BACKUP_REPO="${BACKUP_REPO:-}"
+REQUESTED_BACKUP_REPOS="${BACKUP_REPOS:-}"
+
 if [ -f .env ]; then set -a; . ./.env; set +a; fi
+
+[ -n "$REQUESTED_BACKUP_TYPE" ] && BACKUP_TYPE="$REQUESTED_BACKUP_TYPE"
+if [ -n "$REQUESTED_BACKUP_REPOS" ]; then
+  BACKUP_REPOS="$REQUESTED_BACKUP_REPOS"
+elif [ -n "$REQUESTED_BACKUP_REPO" ]; then
+  BACKUP_REPO="$REQUESTED_BACKUP_REPO"
+  BACKUP_REPOS="$REQUESTED_BACKUP_REPO"
+fi
 
 : "${PATRONI_REST_USER:?}"
 : "${PATRONI_REST_PASSWORD:?}"
 : "${BACKUP_TYPE:=incr}"
 : "${BACKUP_REPO:=1}"
+: "${BACKUP_REPOS:=${BACKUP_REPO}}"
 : "${PGBACKREST_STANZA:=main}"
 
 declare -A REST_PORT=(
@@ -37,7 +50,9 @@ if [ -z "$LEADER" ]; then
   exit 1
 fi
 
-echo "[backup] $(date -u +%FT%TZ) — type=$BACKUP_TYPE, repo=$BACKUP_REPO, leader=$LEADER, stanza=$PGBACKREST_STANZA"
-docker exec -u postgres "$LEADER" pgbackrest --stanza="$PGBACKREST_STANZA" --repo="$BACKUP_REPO" stanza-create >/dev/null 2>&1 || true
-docker exec -u postgres "$LEADER" pgbackrest --stanza="$PGBACKREST_STANZA" --repo="$BACKUP_REPO" --type="$BACKUP_TYPE" backup
-echo "[backup] $(date -u +%FT%TZ) — done"
+echo "[backup] $(date -u +%FT%TZ) - type=$BACKUP_TYPE, repos=$BACKUP_REPOS, leader=$LEADER, stanza=$PGBACKREST_STANZA"
+for REPO in $(echo "$BACKUP_REPOS" | tr ',' ' '); do
+  docker exec -u postgres "$LEADER" pgbackrest --stanza="$PGBACKREST_STANZA" --repo="$REPO" stanza-create >/dev/null 2>&1 || true
+  docker exec -u postgres "$LEADER" pgbackrest --stanza="$PGBACKREST_STANZA" --repo="$REPO" --type="$BACKUP_TYPE" backup
+done
+echo "[backup] $(date -u +%FT%TZ) - done"

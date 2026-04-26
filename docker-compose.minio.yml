@@ -9,9 +9,11 @@
 #      and the S3 API at https://localhost:9000
 #
 #  When this overlay is active, pgBackRest in every Patroni container
-#  writes a SECOND repo (repo2) to s3://<bucket> in addition to the
-#  local `pg-backup-repo` volume (repo1). Backups therefore land in
-#  BOTH places — local for speed, MinIO for durability.
+#  can use repo2 backed by s3://<bucket>. The backup scheduler decides
+#  where backups land via BACKUP_REPOS:
+#    BACKUP_REPOS=1   -> local volume only
+#    BACKUP_REPOS=2   -> MinIO/S3 only
+#    BACKUP_REPOS=1,2 -> both local and MinIO/S3
 #
 #  Start with:   make up-all
 #     (Makefile up-all = core + monitoring + backup + dev + minio)

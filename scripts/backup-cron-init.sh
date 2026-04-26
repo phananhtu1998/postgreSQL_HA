@@ -12,6 +12,7 @@ set -eu
 : "${PATRONI_NODES:=pg-1,pg-2,pg-3}"
 : "${PGBACKREST_STANZA:=main}"
 : "${BACKUP_REPO:=1}"
+: "${BACKUP_REPOS:=${BACKUP_REPO}}"
 
 # Make env available to cron jobs
 {
@@ -21,6 +22,7 @@ set -eu
   echo "PATRONI_REST_PORT=8008"
   echo "PGBACKREST_STANZA=${PGBACKREST_STANZA}"
   echo "BACKUP_REPO=${BACKUP_REPO}"
+  echo "BACKUP_REPOS=${BACKUP_REPOS}"
 } > /etc/backup.env
 
 mkdir -p /var/log/backup
@@ -43,11 +45,13 @@ if [ -z "$LEADER" ]; then
   exit 1
 fi
 
-echo "$(date -u +%FT%TZ) [backup] type=$TYPE repo=$BACKUP_REPO leader=$LEADER" >> /var/log/backup/backup.log
-docker exec -u postgres "$LEADER" pgbackrest --stanza="$PGBACKREST_STANZA" --repo="$BACKUP_REPO" stanza-create \
-  >> /var/log/backup/backup.log 2>&1 || true
-docker exec -u postgres "$LEADER" pgbackrest --stanza="$PGBACKREST_STANZA" --repo="$BACKUP_REPO" --type="$TYPE" backup \
-  >> /var/log/backup/backup.log 2>&1
+for REPO in $(echo "$BACKUP_REPOS" | tr ',' ' '); do
+  echo "$(date -u +%FT%TZ) [backup] type=$TYPE repo=$REPO leader=$LEADER" >> /var/log/backup/backup.log
+  docker exec -u postgres "$LEADER" pgbackrest --stanza="$PGBACKREST_STANZA" --repo="$REPO" stanza-create \
+    >> /var/log/backup/backup.log 2>&1 || true
+  docker exec -u postgres "$LEADER" pgbackrest --stanza="$PGBACKREST_STANZA" --repo="$REPO" --type="$TYPE" backup \
+    >> /var/log/backup/backup.log 2>&1
+done
 echo "$(date -u +%FT%TZ) [backup] done" >> /var/log/backup/backup.log
 EOF
 chmod +x /etc/periodic/backup-runner.sh
@@ -61,6 +65,7 @@ EOF
 echo "[backup-init] schedules:"
 echo "  full: ${BACKUP_CRON_FULL}"
 echo "  incr: ${BACKUP_CRON_INCR}"
+echo "  repos: ${BACKUP_REPOS}"
 echo "[backup-init] starting crond"
 touch /var/log/backup/backup.log
 exec crond -f -d 8 -L /var/log/backup/cron.log

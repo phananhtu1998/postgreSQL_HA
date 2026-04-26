@@ -677,6 +677,74 @@ Các biến cấu hình MinIO/S3 nằm trong `.env`:
 | `PGBACKREST_S3_URI_STYLE` | Mặc định `path`, phù hợp MinIO |
 | `PGBACKREST_S3_VERIFY_TLS` | `n` vì MinIO local dùng self-signed cert |
 
+### Production MinIO/S3 backup
+
+Trong production, không nên coi Docker volume local là backup chính. Nên dùng object storage bên ngoài host PostgreSQL:
+
+```text
+PostgreSQL HA cluster -> pgBackRest repo2 -> external MinIO/S3
+```
+
+Khuyến nghị:
+
+| Thành phần | Cấu hình production |
+|---|---|
+| `repo1` | Local volume, tùy chọn, dùng để restore nhanh trong cùng host |
+| `repo2` | MinIO/S3 bên ngoài cluster PostgreSQL, dùng làm backup chính |
+| MinIO | Multi-node multi-drive, khác host/rack/AZ với PostgreSQL |
+| TLS | Dùng certificate thật và `PGBACKREST_S3_VERIFY_TLS=y` |
+| Mã hóa | Bật pgBackRest client-side encryption cho repo2 |
+| Restore | Test restore định kỳ, không chỉ test backup thành công |
+
+Ví dụ `.env` cho production dùng repo2 làm backup chính:
+
+```env
+BACKUP_REPO=2
+RESTORE_REPO=2
+BACKUP_REPOS=2
+
+PGBACKREST_S3_ENDPOINT=minio-prod.example.com:9000
+PGBACKREST_S3_BUCKET=postgres-backup-prod
+PGBACKREST_S3_REGION=us-east-1
+PGBACKREST_S3_KEY=pgbackrest-prod
+PGBACKREST_S3_KEY_SECRET=<strong-secret>
+PGBACKREST_S3_PATH=/postgres-ha
+PGBACKREST_S3_URI_STYLE=path
+PGBACKREST_S3_VERIFY_TLS=y
+
+PGBACKREST_REPO2_RETENTION_FULL=7
+PGBACKREST_REPO2_RETENTION_DIFF=14
+PGBACKREST_REPO2_CIPHER_TYPE=aes-256-cbc
+PGBACKREST_REPO2_CIPHER_PASS=<very-strong-backup-encryption-key>
+```
+
+Nếu muốn vừa giữ local backup ngắn hạn vừa đẩy lên MinIO/S3 trong cùng một lịch cron:
+
+```env
+BACKUP_REPOS=1,2
+RESTORE_REPO=2
+```
+
+`BACKUP_REPOS=1,2` sẽ chạy pgBackRest backup lần lượt vào repo1 và repo2. Cách này tốn thêm I/O, CPU và dung lượng, nhưng có hai lợi ích: repo1 restore nhanh trong sự cố nhỏ, repo2 dùng cho disaster recovery khi mất host/local volume.
+
+Sau khi đổi các biến pgBackRest/S3, recreate các node PostgreSQL và backup scheduler để render lại `/etc/pgbackrest/pgbackrest.conf`:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.minio.yml -f docker-compose.backup.yml up -d --build --force-recreate pg-1 pg-2 pg-3 backup
+```
+
+Kiểm tra repo2:
+
+```powershell
+docker exec -u postgres pg-1 pgbackrest --stanza=main --repo=2 info
+```
+
+Chạy full backup thử vào repo2:
+
+```bat
+make.bat backup-s3
+```
+
 ## Cấu hình Prometheus và Grafana
 
 Monitoring nằm trong file `docker-compose.monitoring.yml`. Overlay này thêm 5 service:

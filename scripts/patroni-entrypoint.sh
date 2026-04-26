@@ -28,6 +28,15 @@ set -euo pipefail
 : "${PGBACKREST_S3_PATH:=/pgbackrest}"
 : "${PGBACKREST_S3_URI_STYLE:=path}"
 : "${PGBACKREST_S3_VERIFY_TLS:=n}"
+: "${PGBACKREST_PROCESS_MAX:=2}"
+: "${PGBACKREST_COMPRESS_TYPE:=zst}"
+: "${PGBACKREST_COMPRESS_LEVEL:=3}"
+: "${PGBACKREST_REPO1_RETENTION_FULL:=2}"
+: "${PGBACKREST_REPO1_RETENTION_DIFF:=4}"
+: "${PGBACKREST_REPO2_RETENTION_FULL:=7}"
+: "${PGBACKREST_REPO2_RETENTION_DIFF:=14}"
+: "${PGBACKREST_REPO2_CIPHER_TYPE:=}"
+: "${PGBACKREST_REPO2_CIPHER_PASS:=}"
 
 # Render config from template
 CONFIG_FILE=/etc/patroni/patroni.yml
@@ -45,13 +54,13 @@ mkdir -p /etc/pgbackrest
 cat > /etc/pgbackrest/pgbackrest.conf <<EOF
 [global]
 repo1-path=/var/lib/pgbackrest
-repo1-retention-full=2
-repo1-retention-diff=4
+repo1-retention-full=${PGBACKREST_REPO1_RETENTION_FULL}
+repo1-retention-diff=${PGBACKREST_REPO1_RETENTION_DIFF}
 log-level-console=warn
 log-level-file=info
-process-max=2
-compress-type=zst
-compress-level=3
+process-max=${PGBACKREST_PROCESS_MAX}
+compress-type=${PGBACKREST_COMPRESS_TYPE}
+compress-level=${PGBACKREST_COMPRESS_LEVEL}
 start-fast=y
 EOF
 
@@ -70,9 +79,17 @@ repo2-s3-key-secret=${PGBACKREST_S3_KEY_SECRET}
 repo2-s3-uri-style=${PGBACKREST_S3_URI_STYLE}
 repo2-s3-verify-tls=${PGBACKREST_S3_VERIFY_TLS}
 repo2-path=${PGBACKREST_S3_PATH}
-repo2-retention-full=2
-repo2-retention-diff=4
+repo2-retention-full=${PGBACKREST_REPO2_RETENTION_FULL}
+repo2-retention-diff=${PGBACKREST_REPO2_RETENTION_DIFF}
 EOF
+
+  if [ -n "$PGBACKREST_REPO2_CIPHER_TYPE" ]; then
+    : "${PGBACKREST_REPO2_CIPHER_PASS:?PGBACKREST_REPO2_CIPHER_PASS must be set when PGBACKREST_REPO2_CIPHER_TYPE is set}"
+    cat >> /etc/pgbackrest/pgbackrest.conf <<EOF
+repo2-cipher-type=${PGBACKREST_REPO2_CIPHER_TYPE}
+repo2-cipher-pass=${PGBACKREST_REPO2_CIPHER_PASS}
+EOF
+  fi
 fi
 
 cat >> /etc/pgbackrest/pgbackrest.conf <<EOF
