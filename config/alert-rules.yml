@@ -63,7 +63,7 @@ groups:
           description: "Run VACUUM FREEZE on the affected databases."
 
       - alert: PostgresCheckpointsTooFrequent
-        expr: rate(pg_stat_bgwriter_checkpoints_req_total[5m]) > 0.1
+        expr: rate(pg_stat_checkpointer_num_requested_total[5m]) > 0.1
         for: 15m
         labels:
           severity: info

@@ -11,10 +11,12 @@ volumes:
 services:
 
   postgres-exporter-1: &exporter
-    image: prometheuscommunity/postgres-exporter:v0.15.0
+    image: prometheuscommunity/postgres-exporter:v0.19.1
     container_name: postgres-exporter-1
     restart: unless-stopped
     networks: [pg-ha]
+    command:
+      - --collector.stat_checkpointer
     environment:
       DATA_SOURCE_NAME: "postgresql://${PATRONI_SUPERUSER_NAME}:${PATRONI_SUPERUSER_PASSWORD}@pg-1:5432/postgres?sslmode=disable"
       PG_EXPORTER_AUTO_DISCOVER_DATABASES: "true"

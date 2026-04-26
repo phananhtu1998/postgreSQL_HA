@@ -751,9 +751,9 @@ Monitoring nằm trong file `docker-compose.monitoring.yml`. Overlay này thêm 
 
 | Service | Image | Vai trò |
 |---|---|---|
-| `postgres-exporter-1` | `prometheuscommunity/postgres-exporter:v0.15.0` | Lấy metrics từ `pg-1:5432` |
-| `postgres-exporter-2` | `prometheuscommunity/postgres-exporter:v0.15.0` | Lấy metrics từ `pg-2:5432` |
-| `postgres-exporter-3` | `prometheuscommunity/postgres-exporter:v0.15.0` | Lấy metrics từ `pg-3:5432` |
+| `postgres-exporter-1` | `prometheuscommunity/postgres-exporter:v0.19.1` | Lấy metrics từ `pg-1:5432` |
+| `postgres-exporter-2` | `prometheuscommunity/postgres-exporter:v0.19.1` | Lấy metrics từ `pg-2:5432` |
+| `postgres-exporter-3` | `prometheuscommunity/postgres-exporter:v0.19.1` | Lấy metrics từ `pg-3:5432` |
 | `prometheus` | `prom/prometheus:v2.55.1` | Scrape exporters và đánh giá alert rules |
 | `grafana` | `grafana/grafana:11.3.0` | Hiển thị dashboard |
 
