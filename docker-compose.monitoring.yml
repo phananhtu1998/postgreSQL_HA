@@ -1,0 +1,84 @@
+# ════════════════════════════════════════════════════════════════════
+#  Monitoring overlay — postgres_exporter (×3) + Prometheus + Grafana.
+#  Usage:
+#    docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
+# ════════════════════════════════════════════════════════════════════
+
+volumes:
+  prometheus-data:
+  grafana-data:
+
+services:
+
+  postgres-exporter-1: &exporter
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: postgres-exporter-1
+    restart: unless-stopped
+    networks: [pg-ha]
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${PATRONI_SUPERUSER_NAME}:${PATRONI_SUPERUSER_PASSWORD}@pg-1:5432/postgres?sslmode=disable"
+      PG_EXPORTER_AUTO_DISCOVER_DATABASES: "true"
+      PG_EXPORTER_EXCLUDE_DATABASES: "template0,template1"
+    depends_on:
+      pg-1: { condition: service_healthy }
+
+  postgres-exporter-2:
+    <<: *exporter
+    container_name: postgres-exporter-2
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${PATRONI_SUPERUSER_NAME}:${PATRONI_SUPERUSER_PASSWORD}@pg-2:5432/postgres?sslmode=disable"
+      PG_EXPORTER_AUTO_DISCOVER_DATABASES: "true"
+      PG_EXPORTER_EXCLUDE_DATABASES: "template0,template1"
+    depends_on:
+      pg-2: { condition: service_healthy }
+
+  postgres-exporter-3:
+    <<: *exporter
+    container_name: postgres-exporter-3
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${PATRONI_SUPERUSER_NAME}:${PATRONI_SUPERUSER_PASSWORD}@pg-3:5432/postgres?sslmode=disable"
+      PG_EXPORTER_AUTO_DISCOVER_DATABASES: "true"
+      PG_EXPORTER_EXCLUDE_DATABASES: "template0,template1"
+    depends_on:
+      pg-3: { condition: service_healthy }
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: prometheus
+    restart: unless-stopped
+    networks: [pg-ha]
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./config/alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+    depends_on:
+      - postgres-exporter-1
+      - postgres-exporter-2
+      - postgres-exporter-3
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: grafana
+    restart: unless-stopped
+    networks: [pg-ha]
+    user: root
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: ""
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus

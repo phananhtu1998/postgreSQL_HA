@@ -1,0 +1,138 @@
+# ════════════════════════════════════════════════════════════════════
+#  MinIO overlay — S3-compatible object store used as a pgBackRest repo.
+#
+#  What it does:
+#    - Runs a single-node MinIO on the `pg-ha` network.
+#    - Runs an `mc` sidecar that waits for MinIO, creates the bucket,
+#      and provisions the pgBackRest access key/secret from .env.
+#    - Exposes the MinIO console at https://localhost:9001
+#      and the S3 API at https://localhost:9000
+#
+#  When this overlay is active, pgBackRest in every Patroni container
+#  writes a SECOND repo (repo2) to s3://<bucket> in addition to the
+#  local `pg-backup-repo` volume (repo1). Backups therefore land in
+#  BOTH places — local for speed, MinIO for durability.
+#
+#  Start with:   make up-all
+#     (Makefile up-all = core + monitoring + backup + dev + minio)
+#  or separately: docker compose -f docker-compose.yml -f docker-compose.minio.yml up -d
+# ════════════════════════════════════════════════════════════════════
+
+volumes:
+  minio-data:
+  minio-certs:
+
+services:
+
+  # One-shot: generate a self-signed TLS cert for the `minio` hostname.
+  # pgBackRest 2.x requires TLS to S3 endpoints, so MinIO must serve HTTPS.
+  # Cert is persisted in the minio-certs volume and shared with MinIO.
+  minio-certgen:
+    image: alpine:3.20
+    container_name: pg-minio-certgen
+    networks: [pg-ha]
+    volumes:
+      - minio-certs:/certs
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        if [ -s /certs/public.crt ] && [ -s /certs/private.key ]; then
+          echo "[minio-certgen] certs already present — skipping";
+          exit 0;
+        fi;
+        apk add --no-cache openssl >/dev/null;
+        openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
+          -keyout /certs/private.key -out /certs/public.crt \
+          -subj "/CN=minio" \
+          -addext "subjectAltName=DNS:minio,DNS:pg-minio,DNS:localhost,IP:127.0.0.1";
+        chmod 600 /certs/private.key;
+        chmod 644 /certs/public.crt;
+        echo "[minio-certgen] wrote self-signed cert CN=minio";
+    restart: "no"
+
+  minio:
+    image: minio/minio:RELEASE.2025-02-03T21-03-04Z
+    container_name: pg-minio
+    hostname: minio
+    restart: unless-stopped
+    networks: [pg-ha]
+    command: server /data --console-address ":9001" --certs-dir /certs
+    environment:
+      MINIO_ROOT_USER:     ${MINIO_ROOT_USER:?MINIO_ROOT_USER must be set}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD must be set}
+      MINIO_BROWSER_REDIRECT_URL: https://localhost:9001
+    depends_on:
+      minio-certgen: { condition: service_completed_successfully }
+    volumes:
+      - minio-data:/data
+      - minio-certs:/certs:ro
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fskS https://127.0.0.1:9000/minio/health/live >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # mc sidecar: waits for MinIO, creates bucket, provisions the pgBackRest
+  # service account with minimal permissions on that bucket only.
+  minio-setup:
+    image: minio/mc:RELEASE.2025-02-08T19-14-21Z
+    container_name: pg-minio-setup
+    networks: [pg-ha]
+    depends_on:
+      minio: { condition: service_healthy }
+    environment:
+      MINIO_ROOT_USER:          ${MINIO_ROOT_USER:?}
+      MINIO_ROOT_PASSWORD:      ${MINIO_ROOT_PASSWORD:?}
+      PGBACKREST_S3_BUCKET:     ${PGBACKREST_S3_BUCKET:-pgbackrest}
+      PGBACKREST_S3_KEY:        ${PGBACKREST_S3_KEY:?PGBACKREST_S3_KEY must be set}
+      PGBACKREST_S3_KEY_SECRET: ${PGBACKREST_S3_KEY_SECRET:?PGBACKREST_S3_KEY_SECRET must be set}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        echo "[minio-setup] configuring mc alias (TLS, insecure self-signed)";
+        mc alias set --insecure pgha https://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD";
+
+        echo "[minio-setup] ensuring bucket $$PGBACKREST_S3_BUCKET";
+        mc --insecure mb --ignore-existing pgha/"$$PGBACKREST_S3_BUCKET";
+        mc --insecure version enable pgha/"$$PGBACKREST_S3_BUCKET" || true;
+
+        echo "[minio-setup] ensuring service account for pgBackRest";
+        # idempotent: create or update with the requested secret
+        if mc --insecure admin user info pgha "$$PGBACKREST_S3_KEY" >/dev/null 2>&1; then
+          mc --insecure admin user enable pgha "$$PGBACKREST_S3_KEY" || true;
+        else
+          mc --insecure admin user add pgha "$$PGBACKREST_S3_KEY" "$$PGBACKREST_S3_KEY_SECRET";
+        fi;
+
+        # minimal policy: full access to the one bucket only.
+        cat > /tmp/policy.json <<JSON
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            { "Effect": "Allow",
+              "Action": ["s3:*"],
+              "Resource": [
+                "arn:aws:s3:::$$PGBACKREST_S3_BUCKET",
+                "arn:aws:s3:::$$PGBACKREST_S3_BUCKET/*"
+              ] }
+          ]
+        }
+        JSON
+        mc --insecure admin policy create pgha pgbackrest-rw /tmp/policy.json || \
+          mc --insecure admin policy update pgha pgbackrest-rw /tmp/policy.json || true;
+        mc --insecure admin policy attach pgha pgbackrest-rw --user "$$PGBACKREST_S3_KEY" || true;
+
+        echo "[minio-setup] done.";
+    restart: on-failure
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }

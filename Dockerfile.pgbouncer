@@ -1,0 +1,17 @@
+# =====================================================================
+#  PgBouncer with auth_query relay — bakes render script in image so
+#  the stack is portable across Linux / macOS / Windows.
+# =====================================================================
+FROM edoburu/pgbouncer:v1.23.1-p3
+
+USER root
+
+RUN apk add --no-cache dos2unix bash
+
+COPY scripts/render-pgbouncer.sh /usr/local/bin/render-pgbouncer.sh
+RUN dos2unix /usr/local/bin/render-pgbouncer.sh && \
+    chmod +x  /usr/local/bin/render-pgbouncer.sh
+
+USER postgres
+
+ENTRYPOINT ["sh", "/usr/local/bin/render-pgbouncer.sh"]

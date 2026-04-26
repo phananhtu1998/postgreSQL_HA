@@ -1,0 +1,281 @@
+# ════════════════════════════════════════════════════════════════════
+#  PostgreSQL HA — Production Compose
+#
+#  3 etcd nodes (DCS) · 3 Patroni-managed Postgres 17 nodes
+#  HAProxy (write→leader, read→replicas) · PgBouncer (rw + ro pools)
+#
+#  All scripts/configs are baked into a custom image with dos2unix
+#  defensive — runs identically on Linux / macOS / Windows Docker
+#  Desktop / WSL.
+# ════════════════════════════════════════════════════════════════════
+
+networks:
+  pg-ha:
+    name: pg-ha
+    driver: bridge
+
+volumes:
+  etcd-1-data:
+  etcd-2-data:
+  etcd-3-data:
+  pg-1-data:
+  pg-2-data:
+  pg-3-data:
+  # Shared pgBackRest repo — read by all nodes, written by the current
+  # leader. In production replace with an S3/MinIO repo via pgbackrest's
+  # repo1-s3-* options.
+  pg-backup-repo:
+
+# ── Reusable build + base ───────────────────────────────────────────
+x-pg-build: &pg-build
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: postgres-ha-prod:17
+
+x-pg-base: &pg-base
+  <<: *pg-build
+  restart: unless-stopped
+  networks: [pg-ha]
+  ulimits:
+    nofile: { soft: 65536, hard: 65536 }
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+  deploy:
+    resources:
+      limits:     { cpus: "2.0", memory: 2G }
+      reservations: { cpus: "0.5", memory: 512M }
+
+# ── Patroni env shared by every PG node ────────────────────────────
+x-patroni-env: &patroni-env
+  PATRONI_SCOPE: ${PATRONI_SCOPE:-pgcluster}
+  ETCD_HOSTS: "etcd-1:2379,etcd-2:2379,etcd-3:2379"
+  PATRONI_REST_USER: ${PATRONI_REST_USER:?PATRONI_REST_USER must be set}
+  PATRONI_REST_PASSWORD: ${PATRONI_REST_PASSWORD:?PATRONI_REST_PASSWORD must be set}
+  PATRONI_SUPERUSER_NAME: ${PATRONI_SUPERUSER_NAME:?PATRONI_SUPERUSER_NAME must be set}
+  PATRONI_SUPERUSER_PASSWORD: ${PATRONI_SUPERUSER_PASSWORD:?PATRONI_SUPERUSER_PASSWORD must be set}
+  PATRONI_REPLICATION_USERNAME: ${PATRONI_REPLICATION_USERNAME:?PATRONI_REPLICATION_USERNAME must be set}
+  PATRONI_REPLICATION_PASSWORD: ${PATRONI_REPLICATION_PASSWORD:?PATRONI_REPLICATION_PASSWORD must be set}
+  APP_DB_NAME: ${APP_DB_NAME:?APP_DB_NAME must be set}
+  APP_DB_USER: ${APP_DB_USER:?APP_DB_USER must be set}
+  APP_DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set}
+  PG_HEALTHCHECK_USER: ${PG_HEALTHCHECK_USER:-health_chk}
+  PG_HEALTHCHECK_PASSWORD: ${PG_HEALTHCHECK_PASSWORD:?PG_HEALTHCHECK_PASSWORD must be set}
+  PGBACKREST_STANZA: ${PGBACKREST_STANZA:-main}
+  PGBACKREST_S3_ENDPOINT: ${PGBACKREST_S3_ENDPOINT:-}
+  PGBACKREST_S3_BUCKET: ${PGBACKREST_S3_BUCKET:-}
+  PGBACKREST_S3_REGION: ${PGBACKREST_S3_REGION:-us-east-1}
+  PGBACKREST_S3_KEY: ${PGBACKREST_S3_KEY:-}
+  PGBACKREST_S3_KEY_SECRET: ${PGBACKREST_S3_KEY_SECRET:-}
+  PGBACKREST_S3_PATH: ${PGBACKREST_S3_PATH:-/pgbackrest}
+  PGBACKREST_S3_URI_STYLE: ${PGBACKREST_S3_URI_STYLE:-path}
+  PGBACKREST_S3_VERIFY_TLS: ${PGBACKREST_S3_VERIFY_TLS:-n}
+
+services:
+
+  # ═════════════════════════ ETCD CLUSTER ════════════════════════════
+  etcd-1: &etcd-base
+    image: gcr.io/etcd-development/etcd:v3.5.16
+    container_name: etcd-1
+    hostname: etcd-1
+    restart: unless-stopped
+    networks: [pg-ha]
+    volumes:
+      - etcd-1-data:/etcd-data
+    command:
+      - etcd
+      - --name=etcd-1
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd-1:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd-1:2380
+      - --initial-cluster=etcd-1=http://etcd-1:2380,etcd-2=http://etcd-2:2380,etcd-3=http://etcd-3:2380
+      - --initial-cluster-token=pg-ha-etcd
+      - --initial-cluster-state=new
+      - --auto-compaction-retention=1
+      - --quota-backend-bytes=8589934592
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  etcd-2:
+    <<: *etcd-base
+    container_name: etcd-2
+    hostname: etcd-2
+    volumes:
+      - etcd-2-data:/etcd-data
+    command:
+      - etcd
+      - --name=etcd-2
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd-2:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd-2:2380
+      - --initial-cluster=etcd-1=http://etcd-1:2380,etcd-2=http://etcd-2:2380,etcd-3=http://etcd-3:2380
+      - --initial-cluster-token=pg-ha-etcd
+      - --initial-cluster-state=new
+      - --auto-compaction-retention=1
+      - --quota-backend-bytes=8589934592
+
+  etcd-3:
+    <<: *etcd-base
+    container_name: etcd-3
+    hostname: etcd-3
+    volumes:
+      - etcd-3-data:/etcd-data
+    command:
+      - etcd
+      - --name=etcd-3
+      - --data-dir=/etcd-data
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd-3:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd-3:2380
+      - --initial-cluster=etcd-1=http://etcd-1:2380,etcd-2=http://etcd-2:2380,etcd-3=http://etcd-3:2380
+      - --initial-cluster-token=pg-ha-etcd
+      - --initial-cluster-state=new
+      - --auto-compaction-retention=1
+      - --quota-backend-bytes=8589934592
+
+  # ═════════════════════════ PATRONI / POSTGRES ═════════════════════
+  pg-1:
+    <<: *pg-base
+    container_name: pg-1
+    hostname: pg-1
+    environment:
+      <<: *patroni-env
+      PATRONI_NAME: pg-1
+    volumes:
+      - pg-1-data:/var/lib/patroni
+      - pg-backup-repo:/var/lib/pgbackrest
+    command: ["bash", "/usr/local/bin/patroni-entrypoint.sh"]
+    depends_on:
+      etcd-1: { condition: service_healthy }
+      etcd-2: { condition: service_healthy }
+      etcd-3: { condition: service_healthy }
+    ports:
+      - "${PG_1_PORT:-54321}:5432"
+      - "${PATRONI_1_REST_PORT:-8011}:8008"
+    healthcheck:
+      test: ["CMD", "sh", "/usr/local/bin/healthcheck-patroni.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+
+  pg-2:
+    <<: *pg-base
+    container_name: pg-2
+    hostname: pg-2
+    environment:
+      <<: *patroni-env
+      PATRONI_NAME: pg-2
+    volumes:
+      - pg-2-data:/var/lib/patroni
+      - pg-backup-repo:/var/lib/pgbackrest
+    command: ["bash", "/usr/local/bin/patroni-entrypoint.sh"]
+    depends_on:
+      etcd-1: { condition: service_healthy }
+      etcd-2: { condition: service_healthy }
+      etcd-3: { condition: service_healthy }
+    ports:
+      - "${PG_2_PORT:-54322}:5432"
+      - "${PATRONI_2_REST_PORT:-8012}:8008"
+    healthcheck:
+      test: ["CMD", "sh", "/usr/local/bin/healthcheck-patroni.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+
+  pg-3:
+    <<: *pg-base
+    container_name: pg-3
+    hostname: pg-3
+    environment:
+      <<: *patroni-env
+      PATRONI_NAME: pg-3
+    volumes:
+      - pg-3-data:/var/lib/patroni
+      - pg-backup-repo:/var/lib/pgbackrest
+    command: ["bash", "/usr/local/bin/patroni-entrypoint.sh"]
+    depends_on:
+      etcd-1: { condition: service_healthy }
+      etcd-2: { condition: service_healthy }
+      etcd-3: { condition: service_healthy }
+    ports:
+      - "${PG_3_PORT:-54323}:5432"
+      - "${PATRONI_3_REST_PORT:-8013}:8008"
+    healthcheck:
+      test: ["CMD", "sh", "/usr/local/bin/healthcheck-patroni.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 60s
+
+  # ═════════════════════════ HAPROXY ═════════════════════════════════
+  haproxy:
+    image: haproxy:2.9-alpine
+    container_name: pg-haproxy
+    hostname: haproxy
+    restart: unless-stopped
+    networks: [pg-ha]
+    volumes:
+      - ./config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    environment:
+      HAPROXY_STATS_PASSWORD: ${HAPROXY_STATS_PASSWORD:?HAPROXY_STATS_PASSWORD must be set}
+    depends_on:
+      pg-1: { condition: service_healthy }
+      pg-2: { condition: service_healthy }
+      pg-3: { condition: service_healthy }
+    ports:
+      - "${HAPROXY_WRITE_PORT:-5000}:5000"
+      - "${HAPROXY_READ_PORT:-5001}:5001"
+      - "${HAPROXY_STATS_PORT:-7000}:7000"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 5000 && nc -z 127.0.0.1 5001 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ═════════════════════════ PGBOUNCER ═══════════════════════════════
+  pgbouncer:
+    build:
+      context: .
+      dockerfile: Dockerfile.pgbouncer
+    image: postgres-ha-pgbouncer:1.23.1
+    container_name: pg-pgbouncer
+    hostname: pgbouncer
+    restart: unless-stopped
+    networks: [pg-ha]
+    environment:
+      APP_DB_NAME: ${APP_DB_NAME:?}
+      APP_DB_USER: ${APP_DB_USER:?}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?}
+      PG_HEALTHCHECK_USER: ${PG_HEALTHCHECK_USER:-health_chk}
+      PG_HEALTHCHECK_PASSWORD: ${PG_HEALTHCHECK_PASSWORD:?}
+      APP_USERS_EXTRA: ${APP_USERS_EXTRA:-}
+      HAPROXY_HOST: haproxy
+      HAPROXY_WRITE_PORT: "5000"
+      HAPROXY_READ_PORT: "5001"
+      PGBOUNCER_POOL_MODE: ${PGBOUNCER_POOL_MODE:-transaction}
+      PGBOUNCER_MAX_CLIENT_CONN: ${PGBOUNCER_MAX_CLIENT_CONN:-1000}
+      PGBOUNCER_DEFAULT_POOL_SIZE: ${PGBOUNCER_DEFAULT_POOL_SIZE:-80}
+      PGBOUNCER_RESERVE_POOL_SIZE: ${PGBOUNCER_RESERVE_POOL_SIZE:-20}
+    depends_on:
+      haproxy: { condition: service_healthy }
+    ports:
+      - "${PGBOUNCER_PORT:-6432}:6432"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 6432 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s

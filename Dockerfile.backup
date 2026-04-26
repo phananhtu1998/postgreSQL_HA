@@ -1,0 +1,15 @@
+#=====================================================================
+# Backup scheduler — small Alpine image with docker CLI + curl + jq +
+# crond. Mounts the docker socket and runs `docker exec pg-leader
+# pgbackrest backup` on a cron schedule.
+#=====================================================================
+FROM alpine:3.20
+
+RUN apk add --no-cache docker-cli curl jq bash dos2unix tini
+
+COPY scripts/backup-cron-init.sh /usr/local/bin/backup-cron-init.sh
+RUN dos2unix /usr/local/bin/backup-cron-init.sh && \
+    chmod +x  /usr/local/bin/backup-cron-init.sh
+
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["sh", "/usr/local/bin/backup-cron-init.sh"]

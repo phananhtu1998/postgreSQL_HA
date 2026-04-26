@@ -1,0 +1,27 @@
+# ════════════════════════════════════════════════════════════════════
+#  Dev overlay — pgAdmin bound to localhost only.
+#  Usage:
+#    docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# ════════════════════════════════════════════════════════════════════
+
+volumes:
+  pgadmin-data:
+
+services:
+  pgadmin:
+    image: dpage/pgadmin4:8.13
+    container_name: pgadmin
+    restart: unless-stopped
+    networks: [pg-ha]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?PGADMIN_DEFAULT_PASSWORD must be set}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_LISTEN_PORT: "80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    ports:
+      # Bind localhost only — never expose pgAdmin on a public interface.
+      - "127.0.0.1:8080:80"
+    depends_on:
+      pgbouncer: { condition: service_healthy }

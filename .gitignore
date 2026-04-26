@@ -1,0 +1,7 @@
+.env
+backups/*
+!backups/.gitkeep
+pgbackrest/*
+!pgbackrest/.gitkeep
+*.log
+.DS_Store
