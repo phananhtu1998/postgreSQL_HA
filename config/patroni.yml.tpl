@@ -2,19 +2,19 @@
 #  Patroni configuration template — rendered per-node by entrypoint.
 #  All ${VAR} are substituted via envsubst at container start.
 # =====================================================================
-scope: ${PATRONI_SCOPE}
-name: ${PATRONI_NAME}
+scope: "${PATRONI_SCOPE}"
+name: "${PATRONI_NAME}"
 namespace: /service/
 
 restapi:
   listen: 0.0.0.0:8008
-  connect_address: ${PATRONI_NAME}:8008
+  connect_address: "${PATRONI_NAME}:8008"
   authentication:
-    username: ${PATRONI_REST_USER}
-    password: ${PATRONI_REST_PASSWORD}
+    username: "${PATRONI_REST_USER}"
+    password: "${PATRONI_REST_PASSWORD}"
 
 etcd3:
-  hosts: ${ETCD_HOSTS}
+  hosts: "${ETCD_HOSTS}"
   protocol: http
 
 bootstrap:
@@ -68,13 +68,13 @@ bootstrap:
     - local all          all                    trust
 
   users:
-    ${PATRONI_SUPERUSER_NAME}:
-      password: ${PATRONI_SUPERUSER_PASSWORD}
+    "${PATRONI_SUPERUSER_NAME}":
+      password: "${PATRONI_SUPERUSER_PASSWORD}"
       options:
         - createrole
         - createdb
-    ${PATRONI_REPLICATION_USERNAME}:
-      password: ${PATRONI_REPLICATION_PASSWORD}
+    "${PATRONI_REPLICATION_USERNAME}":
+      password: "${PATRONI_REPLICATION_PASSWORD}"
       options:
         - replication
 
@@ -82,20 +82,20 @@ bootstrap:
 
 postgresql:
   listen: 0.0.0.0:5432
-  connect_address: ${PATRONI_NAME}:5432
+  connect_address: "${PATRONI_NAME}:5432"
   data_dir: /var/lib/patroni/pgdata
   bin_dir: /usr/lib/postgresql/17/bin
   pgpass: /tmp/pgpass0
   authentication:
     superuser:
-      username: ${PATRONI_SUPERUSER_NAME}
-      password: ${PATRONI_SUPERUSER_PASSWORD}
+      username: "${PATRONI_SUPERUSER_NAME}"
+      password: "${PATRONI_SUPERUSER_PASSWORD}"
     replication:
-      username: ${PATRONI_REPLICATION_USERNAME}
-      password: ${PATRONI_REPLICATION_PASSWORD}
+      username: "${PATRONI_REPLICATION_USERNAME}"
+      password: "${PATRONI_REPLICATION_PASSWORD}"
     rewind:
-      username: ${PATRONI_REPLICATION_USERNAME}
-      password: ${PATRONI_REPLICATION_PASSWORD}
+      username: "${PATRONI_REPLICATION_USERNAME}"
+      password: "${PATRONI_REPLICATION_PASSWORD}"
   parameters:
     unix_socket_directories: '/var/run/postgresql'
 
