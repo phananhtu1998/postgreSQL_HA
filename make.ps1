@@ -90,6 +90,7 @@ PostgreSQL HA -- PowerShell dispatcher
   status           Container status
   logs             Tail all logs
   patroni-list     Show Patroni cluster topology
+  create-admin     Create/update DBA superuser admin (needs bash)
   failover-test    Run automated failover chaos test (needs bash)
   backup           Incremental pgBackRest backup (needs bash)
   backup-full      Full pgBackRest backup (needs bash)
@@ -128,6 +129,12 @@ switch -Regex ($Target) {
 
     '^patroni-list$' {
         & docker exec pg-1 patronictl -c /etc/patroni/patroni.yml list
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
+
+    '^create-admin$' {
+        Require-Bash
+        & bash scripts/create-admin.sh
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
 

@@ -13,7 +13,8 @@ ALL = $(COMPOSE) $(COMPOSE_CORE) $(COMPOSE_MON) $(COMPOSE_BAK) $(COMPOSE_DEV) $(
 
 .PHONY: help up up-monitoring up-backup up-dev up-all down down-all status logs \
         ps build rebuild patroni-list failover-test backup backup-full restore \
-        psql-write psql-read clean nuke up-minio backup-s3 restore-s3 minio-console
+        psql-write psql-read clean nuke up-minio backup-s3 restore-s3 minio-console \
+        create-admin
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS=":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -58,6 +59,9 @@ rebuild: ## Rebuild from scratch (no cache)
 
 patroni-list: ## Show Patroni cluster topology
 	docker exec pg-1 patronictl -c /etc/patroni/patroni.yml list
+
+create-admin: ## Create/update DBA superuser ADMIN_DB_USER on existing cluster
+	bash scripts/create-admin.sh
 
 failover-test: ## Run automated failover test
 	bash scripts/failover-test.sh

@@ -68,6 +68,7 @@ if /i "%TARGET%"=="logs"              goto :logs
 if /i "%TARGET%"=="build"             goto :build
 if /i "%TARGET%"=="rebuild"           goto :rebuild
 if /i "%TARGET%"=="patroni-list"      goto :patroni_list
+if /i "%TARGET%"=="create-admin"      goto :create_admin
 if /i "%TARGET%"=="failover-test"     goto :failover_test
 if /i "%TARGET%"=="backup"            goto :backup
 if /i "%TARGET%"=="backup-full"       goto :backup_full
@@ -112,6 +113,7 @@ echo   down-all         Stop everything
 echo   status           Container status
 echo   logs             Tail all logs
 echo   patroni-list     Show Patroni cluster topology
+echo   create-admin     Create/update DBA superuser admin (needs bash on PATH)
 echo   failover-test    Run automated failover chaos test (needs bash on PATH)
 echo   backup-s3        Full backup targeting MinIO repo only (needs bash)
 echo   minio-console    Print MinIO console URL
@@ -178,6 +180,15 @@ goto :finish_current
 
 :patroni_list
 docker exec pg-1 patronictl -c /etc/patroni/patroni.yml list
+goto :finish_current
+
+:create_admin
+where bash >nul 2>&1
+if errorlevel 1 (
+  echo bash not found on PATH. Install Git for Windows: https://git-scm.com/download/win
+  goto :finish_error
+)
+bash scripts/create-admin.sh
 goto :finish_current
 
 :failover_test
