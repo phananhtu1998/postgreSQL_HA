@@ -25,6 +25,9 @@ volumes:
   # leader. In production replace with an S3/MinIO repo via pgbackrest's
   # repo1-s3-* options.
   pg-backup-repo:
+  # Shared between `pgbouncer` (renders initial config) and
+  # `pgbouncer-autosync` (re-renders on DB drift, then RELOAD).
+  pgbouncer-config:
 
 # ── Reusable build + base ───────────────────────────────────────────
 x-pg-build: &pg-build
@@ -271,6 +274,7 @@ services:
       PG_HEALTHCHECK_USER: ${PG_HEALTHCHECK_USER:-health_chk}
       PG_HEALTHCHECK_PASSWORD: ${PG_HEALTHCHECK_PASSWORD:?}
       APP_USERS_EXTRA: ${APP_USERS_EXTRA:-}
+      APP_DBS_EXTRA: ${APP_DBS_EXTRA:-}
       HAPROXY_HOST: haproxy
       HAPROXY_WRITE_PORT: "5000"
       HAPROXY_READ_PORT: "5001"
@@ -282,9 +286,56 @@ services:
       haproxy: { condition: service_healthy }
     ports:
       - "${PGBOUNCER_PORT:-6432}:6432"
+    volumes:
+      # Shared with pgbouncer-autosync so the sidecar can re-render
+      # pgbouncer.ini at runtime when new DBs are detected.
+      - pgbouncer-config:/etc/pgbouncer
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 6432 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 15s
+
+  # ═════════════════════════ PGBOUNCER AUTOSYNC ══════════════════════
+  # Polls Postgres for newly-created databases and refreshes
+  # pgbouncer.ini at runtime — so creating a DB via pgAdmin/psql/code
+  # automatically gets `<db>`, `<db>_rw`, `<db>_ro` aliases without
+  # editing .env or restarting pgbouncer. Reload is online (no
+  # disconnect of existing client connections).
+  #
+  # Disable by setting PGBOUNCER_AUTOSYNC_ENABLED=false in .env.
+  pgbouncer-autosync:
+    build:
+      context: .
+      dockerfile: Dockerfile.pgbouncer-autosync
+    image: postgres-ha-pgbouncer-autosync:1.0.0
+    container_name: pg-pgbouncer-autosync
+    hostname: pgbouncer-autosync
+    restart: unless-stopped
+    networks: [pg-ha]
+    environment:
+      APP_DB_NAME: ${APP_DB_NAME:?}
+      APP_DB_USER: ${APP_DB_USER:?}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?}
+      APP_DBS_EXTRA: ${APP_DBS_EXTRA:-}
+      HAPROXY_HOST: haproxy
+      HAPROXY_WRITE_PORT: "5000"
+      HAPROXY_READ_PORT: "5001"
+      PGBOUNCER_HOST: pgbouncer
+      PGBOUNCER_PORT: "6432"
+      PGBOUNCER_POOL_MODE: ${PGBOUNCER_POOL_MODE:-transaction}
+      PGBOUNCER_MAX_CLIENT_CONN: ${PGBOUNCER_MAX_CLIENT_CONN:-1000}
+      PGBOUNCER_DEFAULT_POOL_SIZE: ${PGBOUNCER_DEFAULT_POOL_SIZE:-80}
+      PGBOUNCER_RESERVE_POOL_SIZE: ${PGBOUNCER_RESERVE_POOL_SIZE:-20}
+      PGBOUNCER_AUTOSYNC_ENABLED: ${PGBOUNCER_AUTOSYNC_ENABLED:-true}
+      PGBOUNCER_AUTOSYNC_INTERVAL: ${PGBOUNCER_AUTOSYNC_INTERVAL:-30}
+      PGBOUNCER_AUTOSYNC_EXCLUDE: ${PGBOUNCER_AUTOSYNC_EXCLUDE:-postgres,template0,template1}
+      PGBOUNCER_AUTOSYNC_INITIAL_DELAY: ${PGBOUNCER_AUTOSYNC_INITIAL_DELAY:-15}
+    depends_on:
+      pgbouncer: { condition: service_healthy }
+    volumes:
+      - pgbouncer-config:/etc/pgbouncer
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "3" }

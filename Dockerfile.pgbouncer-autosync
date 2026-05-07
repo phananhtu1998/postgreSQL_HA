@@ -1,0 +1,27 @@
+# =====================================================================
+#  PgBouncer auto-sync sidecar.
+#
+#  Polls pg_database, re-renders /etc/pgbouncer/pgbouncer.ini when
+#  drift is detected, then issues `RELOAD;` to the PgBouncer admin
+#  console. Shares /etc/pgbouncer with the main pgbouncer container
+#  via the named volume `pgbouncer-config`.
+#
+#  Uses the same UID 70 (postgres) as the edoburu/pgbouncer image so
+#  files written here are owned identically and pgbouncer can read
+#  them on RELOAD.
+# =====================================================================
+FROM alpine:3.19
+
+RUN apk add --no-cache postgresql16-client bash dos2unix coreutils \
+ && (getent group postgres || addgroup -g 70 -S postgres) \
+ && (getent passwd postgres || adduser -u 70 -S -G postgres -h /var/lib/postgresql -s /bin/sh postgres)
+
+COPY scripts/build-pgbouncer-ini.sh   /usr/local/bin/build-pgbouncer-ini.sh
+COPY scripts/pgbouncer-autosync.sh    /usr/local/bin/pgbouncer-autosync.sh
+
+RUN dos2unix /usr/local/bin/build-pgbouncer-ini.sh /usr/local/bin/pgbouncer-autosync.sh \
+ && chmod +x /usr/local/bin/build-pgbouncer-ini.sh /usr/local/bin/pgbouncer-autosync.sh
+
+USER postgres
+
+ENTRYPOINT ["bash", "/usr/local/bin/pgbouncer-autosync.sh"]
