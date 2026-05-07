@@ -67,6 +67,7 @@ Các service chính:
 | `pg-1`, `pg-2`, `pg-3` | `docker-compose.yml` | PostgreSQL 17 chạy dưới Patroni |
 | `pg-haproxy` | `docker-compose.yml` | Route ghi/đọc dựa trên trạng thái Patroni REST API |
 | `pg-pgbouncer` | `docker-compose.yml` | Pool kết nối, tạo database alias `app_db_rw`, `app_db_ro` |
+| `pg-pgbouncer-autosync` | `docker-compose.yml` | Sidecar tự discover DB mới, re-render `pgbouncer.ini` + RELOAD online |
 | `postgres-exporter-*` | `docker-compose.monitoring.yml` | Xuất metrics PostgreSQL cho Prometheus |
 | `prometheus` | `docker-compose.monitoring.yml` | Thu thập metrics và alert rules |
 | `grafana` | `docker-compose.monitoring.yml` | Dashboard PostgreSQL HA |
@@ -98,36 +99,63 @@ PgBouncer nằm trước HAProxy để giảm số kết nối thật vào Postg
 
 ### Thêm database mới
 
-PgBouncer KHÔNG tự discover database từ Postgres — nó chỉ route theo entries trong `[databases]`. Để dùng database mới (vd. `shop_db`), cần 3 bước:
+Có 2 cách: **(1) auto** qua sidecar `pgbouncer-autosync` (mặc định bật), hoặc **(2) manual** qua biến `APP_DBS_EXTRA` trong `.env`. Cả hai đều sinh đúng 3 alias `<db>`, `<db>_rw`, `<db>_ro`.
 
-1. **Tạo DB trên Postgres leader** (qua HAProxy write hoặc trực tiếp container leader). Streaming replication tự sync sang `pg-2`/`pg-3`:
-   ```bash
-   docker exec -it pg-1 psql -U postgres -c \
-     "CREATE DATABASE shop_db OWNER app_user;"
-   ```
+#### Cách 1 — Auto (recommended): pgbouncer-autosync sidecar
 
-2. **Khai báo trong `.env`** — biến `APP_DBS_EXTRA` (comma-separated). Mỗi DB sinh ra 3 alias `<db>`, `<db>_rw`, `<db>_ro`:
-   ```ini
-   APP_DBS_EXTRA=shop_db,billing_db,analytics_db
-   ```
+Sidecar `pg-pgbouncer-autosync` chạy song song với pgbouncer, mỗi `PGBOUNCER_AUTOSYNC_INTERVAL` giây (mặc định 30s) query `pg_database` qua HAProxy write port → so với `pgbouncer.ini` → có DB mới thì re-render và gửi `RELOAD;` qua PgBouncer admin (online, không disconnect client).
 
-3. **Restart PgBouncer** để render lại `pgbouncer.ini` (không động core cluster):
-   ```bash
-   docker compose up -d --force-recreate pgbouncer
-   docker logs pgbouncer | tail -3
-   # log dòng: databases routed (each with _rw/_ro alias): app_db shop_db ...
-   ```
-
-Sau đó connect:
 ```bash
-psql -h <host> -p 6432 -U app_user -d shop_db_rw   # write -> leader
-psql -h <host> -p 6432 -U app_user -d shop_db_ro   # read -> replicas
+# 1. Tạo DB trong Postgres — qua pgAdmin, code, hoặc psql:
+docker exec -it pg-1 psql -U postgres -c "CREATE DATABASE shop_db OWNER app_user;"
+# (hoặc click chuột trong pgAdmin → Create → Database)
+
+# 2. Đợi tối đa 30s. Hết. Không cần sửa .env, không restart gì.
+docker logs pg-pgbouncer-autosync | tail -3
+# 2026-... [autosync] drift detected — added: [shop_db], removed: [<none>]
+# 2026-... [autosync] RELOAD ok — pgbouncer.ini now routes: app_db shop_db
+
+# 3. Connect ngay:
+psql -h <host> -p 6432 -U app_user -d shop_db_rw   # write → leader
+psql -h <host> -p 6432 -U app_user -d shop_db_ro   # read  → replicas
 ```
 
-Lưu ý:
-- Tên DB chỉ chấp nhận `[a-zA-Z0-9_]`. Tên có dấu `-` hoặc ký tự đặc biệt sẽ bị skip kèm WARNING trong log entrypoint.
-- User `app_user` (cùng `APP_DB_PASSWORD`) đã có sẵn trong `userlist.txt` của PgBouncer, nên dùng chung credential cho tất cả DB. Muốn user riêng từng DB, dùng `APP_USERS_EXTRA="user1:pass1,user2:pass2"` đồng thời `GRANT` quyền tương ứng trong Postgres.
-- Backup pgBackRest hoạt động ở mức cluster → DB mới được include trong backup tự động ngay.
+DROP DATABASE cũng được xử lý — autosync xoá entry tương ứng và RELOAD.
+
+Tinh chỉnh trong `.env`:
+
+| Biến | Mặc định | Ý nghĩa |
+|---|---|---|
+| `PGBOUNCER_AUTOSYNC_ENABLED` | `true` | `false` → tắt sidecar (sleep infinity, 0 reload) |
+| `PGBOUNCER_AUTOSYNC_INTERVAL` | `30` | Giây giữa các lần poll |
+| `PGBOUNCER_AUTOSYNC_EXCLUDE` | `postgres,template0,template1` | DB không expose qua PgBouncer |
+| `PGBOUNCER_AUTOSYNC_INITIAL_DELAY` | `15` | Giây đợi sau khi start trước khi poll lần đầu |
+
+#### Cách 2 — Manual: biến `APP_DBS_EXTRA`
+
+Nếu tắt sidecar (`PGBOUNCER_AUTOSYNC_ENABLED=false`) hoặc muốn pre-route DB **chưa tồn tại** trong Postgres:
+
+```bash
+# 1. Tạo DB (nếu chưa)
+docker exec -it pg-1 psql -U postgres -c "CREATE DATABASE shop_db OWNER app_user;"
+
+# 2. Sửa .env
+APP_DBS_EXTRA=shop_db,billing_db,analytics_db
+
+# 3. Force-recreate pgbouncer (~3s, không động core)
+docker compose up -d --force-recreate pgbouncer
+docker logs pgbouncer | tail -3
+# log dòng: databases routed (each with _rw/_ro alias): app_db shop_db ...
+```
+
+Sidecar bật mặc định nên `APP_DBS_EXTRA` ít khi cần. Khi sidecar bật **đồng thời** với `APP_DBS_EXTRA`, sidecar coi `APP_DBS_EXTRA` là override list và luôn giữ các DB đó trong `pgbouncer.ini` kể cả khi chưa tồn tại trong Postgres.
+
+#### Lưu ý chung
+
+- Tên DB chỉ chấp nhận `[a-zA-Z0-9_]`. Tên có `-` hoặc ký tự đặc biệt → skip kèm WARNING trong log.
+- User `app_user` (`APP_DB_PASSWORD`) dùng chung cho mọi DB. Muốn user riêng → `APP_USERS_EXTRA="user1:pass1,user2:pass2"` + `GRANT` thủ công trong Postgres.
+- pgBackRest backup ở mức cluster → DB mới được backup tự động ngay.
+- Streaming replication ở mức cluster → DB mới sync sang `pg-2`/`pg-3` ngay khi `CREATE DATABASE` xong.
 
 ## Chuẩn bị `.env`
 

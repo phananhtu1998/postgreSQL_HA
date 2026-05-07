@@ -8,9 +8,10 @@ USER root
 
 RUN apk add --no-cache dos2unix bash
 
-COPY scripts/render-pgbouncer.sh /usr/local/bin/render-pgbouncer.sh
-RUN dos2unix /usr/local/bin/render-pgbouncer.sh && \
-    chmod +x  /usr/local/bin/render-pgbouncer.sh
+COPY scripts/render-pgbouncer.sh   /usr/local/bin/render-pgbouncer.sh
+COPY scripts/build-pgbouncer-ini.sh /usr/local/bin/build-pgbouncer-ini.sh
+RUN dos2unix /usr/local/bin/render-pgbouncer.sh /usr/local/bin/build-pgbouncer-ini.sh && \
+    chmod +x  /usr/local/bin/render-pgbouncer.sh /usr/local/bin/build-pgbouncer-ini.sh
 
 USER postgres
 
