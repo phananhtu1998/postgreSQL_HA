@@ -1461,6 +1461,23 @@ PgBouncer báo sai password:
 Kiểm tra APP_DB_PASSWORD trong .env và restart pg-pgbouncer.
 ```
 
+Patroni crash khi bootstrap với lỗi `AttributeError: 'int' object has no attribute 'encode'`:
+
+```text
+File ".../patroni/postgresql/bootstrap.py", line 131, in _initdb
+    os.write(fd, self._postgresql.config.superuser['password'].encode('utf-8'))
+AttributeError: 'int' object has no attribute 'encode'
+```
+
+Nguyên nhân: password trong `.env` chỉ chứa số (vd. `PATRONI_SUPERUSER_PASSWORD=123`). Sau khi `envsubst` thay vào template YAML, YAML parse thành integer thay vì string. Template hiện tại đã bọc tất cả `${VAR}` password/username bằng dấu nháy YAML nên fix sẵn — nếu vẫn gặp lỗi:
+
+1. Dừng và xoá volume cũ để Patroni bootstrap lại sạch:
+   ```bash
+   docker compose down -v
+   docker compose up -d
+   ```
+2. Lưu ý: password **không được chứa ký tự `"`** (vì template dùng double-quote để bọc). Nếu cần `"` trong password, đổi sang ký tự khác hoặc escape thủ công.
+
 Xem log tập trung:
 
 ```bat
