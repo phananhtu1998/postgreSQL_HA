@@ -2,7 +2,18 @@
 
 Repo này dựng một cụm PostgreSQL 17 có tính sẵn sàng cao bằng Docker Compose. Cụm gồm 3 node PostgreSQL do Patroni quản lý, 3 node etcd làm kho đồng thuận, HAProxy để tự động định tuyến vào primary/replica, PgBouncer để pooling kết nối, và các overlay tùy chọn cho monitoring, backup, pgAdmin.
 
-Tài liệu này mô tả đúng theo các file `docker-compose*.yml`, cách chạy bằng `make.bat`, cách chạy trực tiếp bằng Docker CLI, ý nghĩa các tham số quan trọng và ví dụ kết nối từ Go, Node.js, Python, NestJS.
+Tài liệu này mô tả đúng theo các file `docker-compose*.yml`, cách chạy bằng `make.bat`, cách chạy trực tiếp bằng Docker CLI, ý nghĩa các tham số quan trọng, hướng dẫn kết nối qua **pgAdmin**, và ví dụ kết nối từ Go, Node.js, Python, NestJS (kèm Express CRUD demo trong `src/server.js`).
+
+## Mục lục
+
+- [Kiến trúc](#kiến-trúc) — sơ đồ cụm
+- [Bắt đầu nhanh](#bắt-đầu-nhanh-up--login-pgadmin--query) — up cluster, login pgAdmin, query đầu tiên trong < 5 phút
+- [Thêm database mới](#thêm-database-mới) — auto qua sidecar hoặc manual qua `.env`
+- [Chuẩn bị `.env`](#chuẩn-bị-env) — bảng đầy đủ các biến môi trường
+- [Endpoint và URL cần nhớ](#endpoint-và-url-cần-nhớ) — host/port để app/tool dùng
+- [Kết nối từ Go / Node.js / Python / NestJS](#kết-nối-bằng-go) — ví dụ DSN
+- [pgAdmin chi tiết](#pgadmin-cho-môi-trường-dev) — register server, query rw/ro, troubleshooting
+- [Backup / Monitoring / Production checklist / Troubleshooting](#backup-và-restore)
 
 ## Kiến trúc
 
@@ -74,6 +85,114 @@ Các service chính:
 | `pg-backup` | `docker-compose.backup.yml` | Chạy pgBackRest backup theo cron |
 | `pgadmin` | `docker-compose.dev.yml` | Giao diện quản trị dev, mặc định bind `127.0.0.1:8080` (đổi `PGADMIN_HOST=0.0.0.0` để truy cập từ ngoài) |
 
+## Bắt đầu nhanh: up + login pgAdmin + query
+
+Mục tiêu: từ repo sạch tới kết nối được qua pgAdmin trong < 5 phút.
+
+### 1. Tạo `.env` từ template
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+```
+
+Sửa **tối thiểu** các password sau (không để giá trị `ChangeMe_...`):
+
+```ini
+PATRONI_SUPERUSER_PASSWORD=...    # mật khẩu superuser PostgreSQL
+PATRONI_REPLICATION_PASSWORD=...  # mật khẩu replication user
+PATRONI_REST_PASSWORD=...         # mật khẩu Patroni REST API
+APP_DB_PASSWORD=...               # mật khẩu app user (sẽ dùng trong pgAdmin)
+PG_HEALTHCHECK_PASSWORD=...       # mật khẩu healthcheck user
+HAPROXY_STATS_PASSWORD=...        # mật khẩu HAProxy stats UI
+PGADMIN_DEFAULT_PASSWORD=...      # mật khẩu login pgAdmin
+GRAFANA_ADMIN_PASSWORD=...        # nếu bật monitoring
+MINIO_ROOT_PASSWORD=...           # nếu bật MinIO
+PGBACKREST_REPO2_CIPHER_PASS=...  # nếu bật MinIO/S3 backup
+PGBACKREST_S3_KEY_SECRET=...      # nếu bật MinIO/S3 backup
+```
+
+> **Lưu ý**: KHÔNG dùng password chỉ chứa số (vd. `123`) — YAML parse thành integer và Patroni crash khi bootstrap. Password cũng không được chứa ký tự `"`. Xem [Troubleshooting](#troubleshooting).
+
+### 2. Up cluster + pgAdmin
+
+```bat
+make.bat up-dev
+```
+
+Hoặc Docker CLI:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+```
+
+Đợi 60-90s lần đầu để Patroni initdb + clone replica. Verify:
+
+```bat
+make.bat status
+make.bat patroni-list
+```
+
+`patroni-list` phải có 1 row `Role=Leader Status=running` và 2 row `Role=Replica Status=streaming`.
+
+### 3. Mở pgAdmin
+
+Trình duyệt: <http://localhost:8080>
+
+| Field | Lấy từ `.env` |
+|---|---|
+| Email | `PGADMIN_DEFAULT_EMAIL` (mặc định `admin@example.com`) |
+| Password | `PGADMIN_DEFAULT_PASSWORD` |
+
+> Truy cập pgAdmin từ **máy khác** (LAN/VPN): set `PGADMIN_HOST=0.0.0.0` + `PGADMIN_SERVER_MODE=True` trong `.env` rồi `docker compose ... up -d --force-recreate pgadmin`. Chi tiết: [Truy cập pgAdmin từ máy khác](#truy-cập-pgadmin-từ-máy-khác-laninternet).
+
+### 4. Register server "Postgres HA — Write" (qua PgBouncer)
+
+Sau khi đăng nhập, trong panel trái:
+
+1. Right-click **Servers → Register → Server**.
+2. Tab **General**:
+   - Name: `Postgres HA - Write`
+3. Tab **Connection**:
+   - Host name/address: **`pgbouncer`** *(tên service Docker, KHÔNG dùng `localhost` vì pgAdmin chạy trong container)*
+   - Port: **`6432`**
+   - Maintenance database: **`app_db_rw`** *(alias PgBouncer route ghi qua HAProxy 5000 → leader)*
+   - Username: `app_user` (giá trị `APP_DB_USER`)
+   - Password: giá trị `APP_DB_PASSWORD` trong `.env`
+   - ☑ Save password
+4. Bấm **Save**.
+
+> Lý do dùng `pgbouncer` thay vì `localhost`: pgAdmin chạy trong container, `localhost` là chính nó. PostgreSQL/PgBouncer/HAProxy nằm cùng Docker network `pg-ha` nên dùng tên service. Nếu connect từ tool ngoài Docker (DBeaver/TablePlus trên host), mới dùng `localhost`.
+
+### 5. Tạo server thứ 2 "Postgres HA — Read" (rw/ro pattern)
+
+Lặp lại bước 4 với:
+
+| Field | Giá trị |
+|---|---|
+| Name | `Postgres HA - Read` |
+| Host | `pgbouncer` |
+| Port | `6432` |
+| Maintenance database | `app_db_ro` *(route đọc qua HAProxy 5001 → replica)* |
+| Username | `app_user` |
+| Password | `APP_DB_PASSWORD` |
+
+### 6. Query đầu tiên — verify routing
+
+Click chuột vào server `Postgres HA - Write` → **Tools → Query Tool**, paste:
+
+```sql
+SELECT
+  CASE WHEN pg_is_in_recovery() THEN 'replica' ELSE 'leader' END AS role,
+  inet_server_addr() AS server_ip,
+  current_database() AS db,
+  current_user AS user_name;
+```
+
+Kỳ vọng: `role = leader`. Lặp tương tự ở `Postgres HA - Read` → kỳ vọng `role = replica`.
+
+Tới đây bạn đã connect thành công. Đọc tiếp [Thêm database mới](#thêm-database-mới) để dùng autosync khi tạo DB qua pgAdmin, hoặc [pgAdmin chi tiết](#pgadmin-cho-môi-trường-dev) cho test failover, query show pools, troubleshooting.
+
 ## Cách hoạt động
 
 Khi chạy stack, Docker Compose tạo network `pg-ha`, volume dữ liệu cho từng node, rồi khởi động 3 node etcd. Patroni trên `pg-1`, `pg-2`, `pg-3` kết nối vào etcd để bầu leader. Node giữ leader lock trong etcd sẽ là primary PostgreSQL. Các node còn lại clone dữ liệu và chạy streaming replication.
@@ -122,7 +241,36 @@ psql -h <host> -p 6432 -U app_user -d shop_db_ro   # read  → replicas
 
 DROP DATABASE cũng được xử lý — autosync xoá entry tương ứng và RELOAD.
 
-Tinh chỉnh trong `.env`:
+##### Tạo DB qua pgAdmin GUI (no-CLI)
+
+1. Trong pgAdmin, kết nối server `Postgres HA - Write` (xem [Bắt đầu nhanh](#bắt-đầu-nhanh-up--login-pgadmin--query) bước 4 để register).
+2. Right-click **Databases → Create → Database…**.
+3. Tab **General**:
+   - Database: `shop_db` *(tên DB mới — chỉ ký tự `[a-zA-Z0-9_]`, không dùng `-` hay khoảng trắng)*
+   - Owner: `app_user` *(user ứng dụng đã có trong PgBouncer userlist)*
+4. Bấm **Save**. DB mới xuất hiện trong cây bên trái.
+5. Đợi ≤ 30 giây (theo `PGBOUNCER_AUTOSYNC_INTERVAL`). Verify ở terminal:
+   ```bash
+   docker logs pg-pgbouncer-autosync | tail -3
+   # → [autosync] drift detected — added: [shop_db]
+   # → [autosync] RELOAD ok — pgbouncer.ini now routes: app_db shop_db
+   ```
+6. Trong pgAdmin, register thêm 1 server mới qua PgBouncer alias mới (vì pgAdmin connect 1 maintenance database tại 1 server):
+
+   | Field | Giá trị |
+   |---|---|
+   | Name | `shop_db (rw)` |
+   | Host | `pgbouncer` |
+   | Port | `6432` |
+   | Maintenance database | `shop_db_rw` |
+   | Username | `app_user` |
+   | Password | `APP_DB_PASSWORD` |
+
+   Lặp lại với `shop_db_ro` cho read endpoint nếu cần.
+
+> Khi DROP DATABASE qua pgAdmin (right-click DB → Delete/Drop), autosync cũng tự xoá 3 alias `<db>`, `<db>_rw`, `<db>_ro` khỏi `pgbouncer.ini` trong vòng 30s.
+
+##### Tinh chỉnh sidecar trong `.env`
 
 | Biến | Mặc định | Ý nghĩa |
 |---|---|---|
@@ -192,11 +340,40 @@ Các biến quan trọng:
 | `PGBOUNCER_POOL_MODE` | Pool mode, mặc định `transaction` |
 | `PGBOUNCER_MAX_CLIENT_CONN` | Số client tối đa PgBouncer nhận |
 | `PGBOUNCER_DEFAULT_POOL_SIZE` | Số connection backend mặc định mỗi pool |
+| `PGBOUNCER_RESERVE_POOL_SIZE` | Số connection dự phòng khi pool đầy, mặc định `20` |
+| `APP_DBS_EXTRA` | Pre-route DB chưa tồn tại trong Postgres (vd. `shop_db,billing_db`). Mỗi entry sinh `<db>`, `<db>_rw`, `<db>_ro`. Khi sidecar autosync bật, biến này CHỈ cần khi muốn pre-route DB chưa CREATE. Xem [Thêm database mới](#thêm-database-mới). |
 | `PGBACKREST_STANZA` | Tên stanza pgBackRest, mặc định `main` |
-| `GRAFANA_ADMIN_USER` | User Grafana |
-| `GRAFANA_ADMIN_PASSWORD` | Password Grafana |
-| `PGADMIN_DEFAULT_EMAIL` | Email đăng nhập pgAdmin |
-| `PGADMIN_DEFAULT_PASSWORD` | Password pgAdmin |
+| `GRAFANA_ADMIN_USER` | User Grafana (chỉ overlay monitoring) |
+| `GRAFANA_ADMIN_PASSWORD` | Password Grafana (chỉ overlay monitoring) |
+| `PGADMIN_DEFAULT_EMAIL` | Email đăng nhập pgAdmin (chỉ overlay dev) |
+| `PGADMIN_DEFAULT_PASSWORD` | Password pgAdmin (chỉ overlay dev) |
+
+Các biến cho **pgbouncer-autosync sidecar** (auto detect DB mới):
+
+| Biến | Mặc định | Ý nghĩa |
+|---|---|---|
+| `PGBOUNCER_AUTOSYNC_ENABLED` | `true` | `false` → tắt sidecar (sleep infinity, 0 reload) |
+| `PGBOUNCER_AUTOSYNC_INTERVAL` | `30` | Số giây giữa các lần poll `pg_database` |
+| `PGBOUNCER_AUTOSYNC_EXCLUDE` | `postgres,template0,template1` | DB nội bộ không expose qua PgBouncer (comma-separated) |
+| `PGBOUNCER_AUTOSYNC_INITIAL_DELAY` | `15` | Số giây đợi sau khi start trước khi poll lần đầu (cho pgbouncer kịp render config) |
+
+Các biến **pgAdmin** (overlay dev):
+
+| Biến | Mặc định | Ý nghĩa |
+|---|---|---|
+| `PGADMIN_HOST` | `127.0.0.1` | Interface host bind cổng pgAdmin. Set `0.0.0.0` để truy cập từ máy khác (LAN/VPN) |
+| `PGADMIN_PORT` | `8080` | Cổng host map vào pgAdmin (đổi nếu trùng cổng khác) |
+| `PGADMIN_SERVER_MODE` | `False` | `True` → multi-user + login bắt buộc (recommended khi expose ra ngoài). `False` → desktop mode (single-user) |
+
+Các biến **backup repo selector** (chỉ cần khi dùng overlay backup/MinIO):
+
+| Biến | Mặc định | Ý nghĩa |
+|---|---|---|
+| `BACKUP_REPO` | `1` | Repo dùng cho `make.bat backup` thủ công (`1` local, `2` MinIO/S3) |
+| `BACKUP_REPOS` | `1` | Repo cron tự động ghi (có thể `1`, `2`, hoặc `1,2`) |
+| `RESTORE_REPO` | `1` | Repo dùng cho `make.bat restore` |
+
+Các biến **MinIO + S3** (chỉ cần khi bật `docker-compose.minio.yml`): `MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_API_PORT`, `MINIO_CONSOLE_PORT`, `PGBACKREST_S3_*`, `PGBACKREST_REPO2_CIPHER_*`. Xem chi tiết tại [Backup lên MinIO](#backup-lên-minio).
 
 Các biến port:
 
@@ -1453,7 +1630,7 @@ Kết nối vào server `Postgres HA - Write` hoặc `Postgres HA - Read`, rồi
 show databases;
 ```
 
-Vì `APP_DB_USER` được cấu hình là `stats_users` và `admin_users` trong PgBouncer, bạn có thể xem các alias:
+`app_user` đã được cấu hình là `stats_users` + `admin_users` trong `pgbouncer.ini` (xem [`scripts/build-pgbouncer-ini.sh`](scripts/build-pgbouncer-ini.sh)) nên có quyền chạy các lệnh quản trị `SHOW DATABASES`, `SHOW POOLS`, `SHOW CLIENTS`, `RELOAD`. Output `SHOW DATABASES` trả về toàn bộ alias đang được route — nếu autosync đã chạy xong, các DB tạo qua pgAdmin/CLI cũng xuất hiện ở đây:
 
 | Alias | Backend |
 |---|---|
