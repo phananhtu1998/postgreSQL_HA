@@ -21,6 +21,27 @@ psql -v ON_ERROR_STOP=1 --username "${PATRONI_SUPERUSER_NAME}" --dbname postgres
     CREATE ROLE pgbouncer_auth WITH LOGIN PASSWORD '${APP_DB_PASSWORD}';
 EOSQL
 
+# DBA superuser (login pgAdmin → CREATE DATABASE / CREATE ROLE / ...).
+# Optional: skip if not configured. Idempotent so a re-run won't fail.
+if [ -n "${ADMIN_DB_USER:-}" ] && [ -n "${ADMIN_DB_PASSWORD:-}" ]; then
+  psql -v ON_ERROR_STOP=1 --username "${PATRONI_SUPERUSER_NAME}" --dbname postgres <<-EOSQL
+        DO \$\$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${ADMIN_DB_USER}') THEN
+                CREATE ROLE ${ADMIN_DB_USER}
+                    WITH LOGIN SUPERUSER CREATEDB CREATEROLE
+                    PASSWORD '${ADMIN_DB_PASSWORD}';
+            ELSE
+                ALTER ROLE ${ADMIN_DB_USER}
+                    WITH LOGIN SUPERUSER CREATEDB CREATEROLE
+                    PASSWORD '${ADMIN_DB_PASSWORD}';
+            END IF;
+        END
+        \$\$;
+EOSQL
+  echo "[post-init] DBA superuser '${ADMIN_DB_USER}' created/updated"
+fi
+
 # auth_query function lives in every database PgBouncer talks to.
 for db in postgres "${APP_DB_NAME}"; do
   psql -v ON_ERROR_STOP=1 --username "${PATRONI_SUPERUSER_NAME}" --dbname "$db" <<-EOSQL

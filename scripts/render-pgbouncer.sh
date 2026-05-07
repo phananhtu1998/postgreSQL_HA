@@ -40,6 +40,8 @@ set -eu
 : "${PGBOUNCER_RESERVE_POOL_SIZE:=20}"
 : "${APP_USERS_EXTRA:=}"
 : "${APP_DBS_EXTRA:=}"
+: "${ADMIN_DB_USER:=}"
+: "${ADMIN_DB_PASSWORD:=}"
 
 mkdir -p /etc/pgbouncer
 
@@ -55,6 +57,9 @@ sh /usr/local/bin/build-pgbouncer-ini.sh > /etc/pgbouncer/pgbouncer.ini
 {
   printf '"%s" "%s"\n' "${APP_DB_USER}"          "${APP_DB_PASSWORD}"
   printf '"%s" "%s"\n' "${PG_HEALTHCHECK_USER}"  "${PG_HEALTHCHECK_PASSWORD}"
+  if [ -n "${ADMIN_DB_USER}" ] && [ -n "${ADMIN_DB_PASSWORD}" ]; then
+    printf '"%s" "%s"\n' "${ADMIN_DB_USER}" "${ADMIN_DB_PASSWORD}"
+  fi
   if [ -n "${APP_USERS_EXTRA}" ]; then
     echo "${APP_USERS_EXTRA}" | tr ',' '\n' | while IFS=':' read -r u p; do
       [ -n "$u" ] && [ -n "$p" ] && printf '"%s" "%s"\n' "$u" "$p"

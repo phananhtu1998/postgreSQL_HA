@@ -19,6 +19,10 @@ set -euo pipefail
 : "${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set}"
 : "${PG_HEALTHCHECK_USER:=health_chk}"
 : "${PG_HEALTHCHECK_PASSWORD:?PG_HEALTHCHECK_PASSWORD must be set}"
+# Optional DBA superuser created by post-init.sh / scripts/create-admin.sh.
+# Empty values disable creation (back-compat with older .env files).
+: "${ADMIN_DB_USER:=}"
+: "${ADMIN_DB_PASSWORD:=}"
 : "${PGBACKREST_STANZA:=main}"
 : "${PGBACKREST_S3_ENDPOINT:=}"
 : "${PGBACKREST_S3_BUCKET:=}"

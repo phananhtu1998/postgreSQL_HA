@@ -63,6 +63,10 @@ x-patroni-env: &patroni-env
   APP_DB_NAME: ${APP_DB_NAME:?APP_DB_NAME must be set}
   APP_DB_USER: ${APP_DB_USER:?APP_DB_USER must be set}
   APP_DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set}
+  # Optional DBA superuser; created by post-init.sh on fresh init or by
+  # `make create-admin` against an existing cluster. Empty = skip.
+  ADMIN_DB_USER: ${ADMIN_DB_USER:-}
+  ADMIN_DB_PASSWORD: ${ADMIN_DB_PASSWORD:-}
   PG_HEALTHCHECK_USER: ${PG_HEALTHCHECK_USER:-health_chk}
   PG_HEALTHCHECK_PASSWORD: ${PG_HEALTHCHECK_PASSWORD:?PG_HEALTHCHECK_PASSWORD must be set}
   PGBACKREST_STANZA: ${PGBACKREST_STANZA:-main}
@@ -271,6 +275,8 @@ services:
       APP_DB_NAME: ${APP_DB_NAME:?}
       APP_DB_USER: ${APP_DB_USER:?}
       APP_DB_PASSWORD: ${APP_DB_PASSWORD:?}
+      ADMIN_DB_USER: ${ADMIN_DB_USER:-}
+      ADMIN_DB_PASSWORD: ${ADMIN_DB_PASSWORD:-}
       PG_HEALTHCHECK_USER: ${PG_HEALTHCHECK_USER:-health_chk}
       PG_HEALTHCHECK_PASSWORD: ${PG_HEALTHCHECK_PASSWORD:?}
       APP_USERS_EXTRA: ${APP_USERS_EXTRA:-}
