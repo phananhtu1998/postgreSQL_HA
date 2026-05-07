@@ -96,6 +96,39 @@ PgBouncer nằm trước HAProxy để giảm số kết nối thật vào Postg
 | `app_db_rw` | Route write qua HAProxy `5000` |
 | `app_db_ro` | Route read qua HAProxy `5001` |
 
+### Thêm database mới
+
+PgBouncer KHÔNG tự discover database từ Postgres — nó chỉ route theo entries trong `[databases]`. Để dùng database mới (vd. `shop_db`), cần 3 bước:
+
+1. **Tạo DB trên Postgres leader** (qua HAProxy write hoặc trực tiếp container leader). Streaming replication tự sync sang `pg-2`/`pg-3`:
+   ```bash
+   docker exec -it pg-1 psql -U postgres -c \
+     "CREATE DATABASE shop_db OWNER app_user;"
+   ```
+
+2. **Khai báo trong `.env`** — biến `APP_DBS_EXTRA` (comma-separated). Mỗi DB sinh ra 3 alias `<db>`, `<db>_rw`, `<db>_ro`:
+   ```ini
+   APP_DBS_EXTRA=shop_db,billing_db,analytics_db
+   ```
+
+3. **Restart PgBouncer** để render lại `pgbouncer.ini` (không động core cluster):
+   ```bash
+   docker compose up -d --force-recreate pgbouncer
+   docker logs pgbouncer | tail -3
+   # log dòng: databases routed (each with _rw/_ro alias): app_db shop_db ...
+   ```
+
+Sau đó connect:
+```bash
+psql -h <host> -p 6432 -U app_user -d shop_db_rw   # write -> leader
+psql -h <host> -p 6432 -U app_user -d shop_db_ro   # read -> replicas
+```
+
+Lưu ý:
+- Tên DB chỉ chấp nhận `[a-zA-Z0-9_]`. Tên có dấu `-` hoặc ký tự đặc biệt sẽ bị skip kèm WARNING trong log entrypoint.
+- User `app_user` (cùng `APP_DB_PASSWORD`) đã có sẵn trong `userlist.txt` của PgBouncer, nên dùng chung credential cho tất cả DB. Muốn user riêng từng DB, dùng `APP_USERS_EXTRA="user1:pass1,user2:pass2"` đồng thời `GRANT` quyền tương ứng trong Postgres.
+- Backup pgBackRest hoạt động ở mức cluster → DB mới được include trong backup tự động ngay.
+
 ## Chuẩn bị `.env`
 
 Compose bắt buộc có file `.env`. Nếu thiếu, bạn sẽ gặp lỗi kiểu:
