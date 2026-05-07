@@ -71,7 +71,7 @@ Các service chính:
 | `prometheus` | `docker-compose.monitoring.yml` | Thu thập metrics và alert rules |
 | `grafana` | `docker-compose.monitoring.yml` | Dashboard PostgreSQL HA |
 | `pg-backup` | `docker-compose.backup.yml` | Chạy pgBackRest backup theo cron |
-| `pgadmin` | `docker-compose.dev.yml` | Giao diện quản trị dev, bind `127.0.0.1:8080` |
+| `pgadmin` | `docker-compose.dev.yml` | Giao diện quản trị dev, mặc định bind `127.0.0.1:8080` (đổi `PGADMIN_HOST=0.0.0.0` để truy cập từ ngoài) |
 
 ## Cách hoạt động
 
@@ -1128,7 +1128,40 @@ Lỗi thường gặp:
 
 ## pgAdmin cho môi trường dev
 
-pgAdmin nằm trong overlay `docker-compose.dev.yml`, chỉ bind ra `127.0.0.1:8080` để dùng local. Overlay này phụ thuộc vào `pgbouncer`, nên khi chạy `up-dev` Compose sẽ chạy core stack trước rồi mới chạy pgAdmin.
+pgAdmin nằm trong overlay `docker-compose.dev.yml`. Mặc định bind `127.0.0.1:8080` (chỉ truy cập từ máy host) để an toàn. Overlay này phụ thuộc vào `pgbouncer`, nên khi chạy `up-dev` Compose sẽ chạy core stack trước rồi mới chạy pgAdmin.
+
+### Truy cập pgAdmin từ máy khác (LAN/internet)
+
+Mặc định pgAdmin chỉ nghe trên `127.0.0.1` của host. Để máy khác truy cập được, set 2 biến trong `.env`:
+
+```ini
+PGADMIN_HOST=0.0.0.0          # bind mọi interface (cho phép remote)
+PGADMIN_PORT=8080             # cổng host (đổi nếu trùng)
+PGADMIN_SERVER_MODE=True      # bật multi-user + login bắt buộc
+```
+
+Sau đó restart pgAdmin (volume `pgadmin-data` được giữ nguyên, không mất user/server đã save):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --force-recreate pgadmin
+```
+
+Truy cập từ máy khác qua `http://<IP-host>:8080`. Kiểm tra cổng đã listen đúng:
+
+```bash
+docker port pgadmin
+# ra: 80/tcp -> 0.0.0.0:8080
+```
+
+Nếu vẫn không vào được:
+- Mở firewall của host (Linux: `sudo ufw allow 8080/tcp`; Windows: tạo Inbound Rule cho cổng `8080`).
+- Nếu host có IP public, **không** để `0.0.0.0` trần — đặt phía sau VPN, hoặc dùng reverse proxy (Nginx/Caddy/Traefik) với TLS + auth tầng ngoài.
+- Khi đã đặt `PGADMIN_SERVER_MODE=True` lần đầu, pgAdmin yêu cầu đăng ký lại admin từ container đã khởi tạo. Nếu cần reset sạch, xoá volume:
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml down
+  docker volume rm postgresql_ha_pgadmin-data   # tên volume có thể khác tùy project name
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+  ```
 
 ### Chạy pgAdmin
 
