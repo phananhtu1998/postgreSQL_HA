@@ -13,6 +13,11 @@
 #
 #  To add more application users, add them to APP_USERS_EXTRA in the
 #  form "user1:pass1,user2:pass2".
+#
+#  To route additional databases through PgBouncer (write via HAProxy
+#  port 5000, read via 5001), set APP_DBS_EXTRA="db1,db2,..." in .env.
+#  The DBs must already exist on Postgres (CREATE DATABASE on leader).
+#  Each entry generates 3 PgBouncer aliases: <db>, <db>_rw, <db>_ro.
 # =====================================================================
 set -eu
 
@@ -29,14 +34,44 @@ set -eu
 : "${PGBOUNCER_DEFAULT_POOL_SIZE:=80}"
 : "${PGBOUNCER_RESERVE_POOL_SIZE:=20}"
 : "${APP_USERS_EXTRA:=}"
+: "${APP_DBS_EXTRA:=}"
 
 mkdir -p /etc/pgbouncer
 
-cat > /etc/pgbouncer/pgbouncer.ini <<EOF
-[databases]
+# Build [databases] section dynamically: APP_DB_NAME (3 entries) + each DB
+# in APP_DBS_EXTRA (3 entries: plain alias, _rw, _ro).
+DATABASES_INI="[databases]
 ${APP_DB_NAME}    = host=${HAPROXY_HOST} port=${HAPROXY_WRITE_PORT} dbname=${APP_DB_NAME}
 ${APP_DB_NAME}_rw = host=${HAPROXY_HOST} port=${HAPROXY_WRITE_PORT} dbname=${APP_DB_NAME}
-${APP_DB_NAME}_ro = host=${HAPROXY_HOST} port=${HAPROXY_READ_PORT}  dbname=${APP_DB_NAME}
+${APP_DB_NAME}_ro = host=${HAPROXY_HOST} port=${HAPROXY_READ_PORT}  dbname=${APP_DB_NAME}"
+
+EXTRA_DB_LIST=""
+if [ -n "${APP_DBS_EXTRA}" ]; then
+  # Comma-separated → space-separated for `for` loop. Trim whitespace per item.
+  for raw_db in $(echo "${APP_DBS_EXTRA}" | tr ',' ' '); do
+    db=$(echo "${raw_db}" | tr -d '[:space:]')
+    [ -z "${db}" ] && continue
+    # Skip the primary APP_DB_NAME (already emitted above) and any duplicates
+    # already collected in this loop.
+    if [ "${db}" = "${APP_DB_NAME}" ]; then continue; fi
+    case " ${EXTRA_DB_LIST} " in *" ${db} "*) continue ;; esac
+    # Validate db name: only [a-zA-Z0-9_] allowed (Postgres identifier without quoting).
+    case "${db}" in
+      *[!a-zA-Z0-9_]*)
+        echo "[pgbouncer-entrypoint] WARNING: skipping invalid DB name '${db}' (only [a-zA-Z0-9_] allowed)" >&2
+        continue
+        ;;
+    esac
+    EXTRA_DB_LIST="${EXTRA_DB_LIST} ${db}"
+    DATABASES_INI="${DATABASES_INI}
+${db}    = host=${HAPROXY_HOST} port=${HAPROXY_WRITE_PORT} dbname=${db}
+${db}_rw = host=${HAPROXY_HOST} port=${HAPROXY_WRITE_PORT} dbname=${db}
+${db}_ro = host=${HAPROXY_HOST} port=${HAPROXY_READ_PORT}  dbname=${db}"
+  done
+fi
+
+cat > /etc/pgbouncer/pgbouncer.ini <<EOF
+${DATABASES_INI}
 
 [pgbouncer]
 listen_addr = 0.0.0.0
@@ -81,5 +116,8 @@ EOF
 
 chmod 600 /etc/pgbouncer/pgbouncer.ini /etc/pgbouncer/userlist.txt
 
+RENDERED_DBS="${APP_DB_NAME}"
+[ -n "${EXTRA_DB_LIST}" ] && RENDERED_DBS="${RENDERED_DBS}${EXTRA_DB_LIST}"
 echo "[pgbouncer-entrypoint] config rendered for users: ${APP_DB_USER}, ${PG_HEALTHCHECK_USER}"
+echo "[pgbouncer-entrypoint] databases routed (each with _rw/_ro alias): ${RENDERED_DBS}"
 exec pgbouncer /etc/pgbouncer/pgbouncer.ini
