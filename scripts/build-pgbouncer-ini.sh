@@ -69,6 +69,15 @@ for raw_db in ${EXTRA_DBS}; do
   emit_db_block "${db}"
 done
 
+# Wildcard catch-all: route any database not explicitly listed above to the
+# HAProxy write port (leader).  This lets clients connect to newly-created
+# databases immediately — without waiting for autosync to add explicit
+# aliases.  PgBouncer uses the client-requested DB name when connecting to
+# the backend, so the target database must exist in PostgreSQL.
+# Once autosync detects the new DB, it re-renders this file with explicit
+# <db>/<db>_rw/<db>_ro entries that take precedence over the wildcard.
+printf '* = host=%s port=%s\n' "${HAPROXY_HOST}" "${HAPROXY_WRITE_PORT}"
+
 cat <<EOF
 
 [pgbouncer]
