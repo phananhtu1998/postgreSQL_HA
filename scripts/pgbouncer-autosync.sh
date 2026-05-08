@@ -139,9 +139,10 @@ while true; do
 
   current=$(current_pgbouncer_dbs)
 
-  # Build "expected" set = discovered ∪ APP_DBS_EXTRA (∪ APP_DB_NAME implicitly).
+  # Build "expected" set = discovered ∪ APP_DBS_EXTRA (∪ APP_DB_NAME ∪ postgres).
+  # 'postgres' is always routed by build-pgbouncer-ini.sh for admin access.
   manual=$(echo "${APP_DBS_EXTRA}" | tr ',' ' ' | tr ' ' '\n' | grep -v '^$' || true)
-  expected=$(printf '%s\n%s\n%s\n' "${APP_DB_NAME}" "${discovered}" "${manual}" \
+  expected=$(printf '%s\n%s\n%s\n%s\n' "${APP_DB_NAME}" "postgres" "${discovered}" "${manual}" \
              | grep -v '^$' | sort -u)
 
   if [ "${current}" = "${expected}" ]; then

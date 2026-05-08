@@ -47,8 +47,14 @@ cat <<EOF
 EOF
 emit_db_block "${APP_DB_NAME}"
 
+# Always route 'postgres' so admin/superuser can manage the cluster
+# via PgBouncer (e.g. CREATE DATABASE from pgAdmin).
+if [ "${APP_DB_NAME}" != "postgres" ]; then
+  emit_db_block "postgres"
+fi
+
 # Track already-emitted DBs to dedupe (POSIX sh — no associative arrays).
-EMITTED=" ${APP_DB_NAME} "
+EMITTED=" ${APP_DB_NAME} postgres "
 for raw_db in ${EXTRA_DBS}; do
   db=$(echo "${raw_db}" | tr -d '[:space:]')
   [ -z "${db}" ] && continue
