@@ -37,9 +37,9 @@ set -euo pipefail
 : "${PGBOUNCER_PORT:=6432}"
 : "${APP_DBS_EXTRA:=}"
 : "${PGBOUNCER_AUTOSYNC_ENABLED:=true}"
-: "${PGBOUNCER_AUTOSYNC_INTERVAL:=30}"
+: "${PGBOUNCER_AUTOSYNC_INTERVAL:=5}"
 : "${PGBOUNCER_AUTOSYNC_EXCLUDE:=postgres,template0,template1}"
-: "${PGBOUNCER_AUTOSYNC_INITIAL_DELAY:=15}"
+: "${PGBOUNCER_AUTOSYNC_INITIAL_DELAY:=5}"
 : "${PGBOUNCER_INI_PATH:=/etc/pgbouncer/pgbouncer.ini}"
 
 log() { printf '%s [autosync] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
