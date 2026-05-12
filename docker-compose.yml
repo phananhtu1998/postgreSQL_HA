@@ -28,6 +28,44 @@ volumes:
   # Shared between `pgbouncer` (renders initial config) and
   # `pgbouncer-autosync` (re-renders on DB drift, then RELOAD).
   pgbouncer-config:
+  # ── Redis Sentinel volumes ──────────────────────────────────────────
+  redis-master-data:
+  redis-replica1-data:
+  redis-replica2-data:
+  redis-sentinel1-data:
+  redis-sentinel2-data:
+  redis-sentinel3-data:
+
+# ── Reusable Redis fragments ───────────────────────────────────────
+x-redis-base: &redis-base
+  image: redis:7.2-alpine
+  restart: unless-stopped
+  networks: [pg-ha]
+  ulimits:
+    nofile: { soft: 65536, hard: 65536 }
+  sysctls:
+    net.core.somaxconn: 511
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+  deploy:
+    resources:
+      limits: { cpus: "1.0", memory: 768M }
+      reservations: { cpus: "0.25", memory: 256M }
+
+x-sentinel-base: &sentinel-base
+  image: redis:7.2-alpine
+  restart: unless-stopped
+  networks: [pg-ha]
+  ulimits:
+    nofile: { soft: 65536, hard: 65536 }
+  logging:
+    driver: json-file
+    options: { max-size: "5m", max-file: "3" }
+  deploy:
+    resources:
+      limits: { cpus: "0.5", memory: 256M }
+      reservations: { cpus: "0.1", memory: 64M }
 
 # ── Reusable build + base ───────────────────────────────────────────
 x-pg-build: &pg-build
@@ -345,3 +383,180 @@ services:
     logging:
       driver: json-file
       options: { max-size: "5m", max-file: "3" }
+
+  # ═════════════════════════ REDIS SENTINEL ═════════════════════════════
+  # 1 Master · 2 Replicas · 3 Sentinels (quorum 2)
+  # Sentinel-aware clients discover the current master automatically.
+  # All nodes share the pg-ha network so apps can reach both PG and Redis.
+
+  # ═════════════════════════════ REDIS MASTER ══════════════════════════
+  redis-master:
+    <<: *redis-base
+    container_name: redis-master
+    hostname: redis-master
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      REDIS_MAXMEMORY: ${REDIS_MAXMEMORY:-512mb}
+    volumes:
+      - redis-master-data:/data
+      - ./redis/config/redis-master.conf:/etc/redis/redis.conf:ro
+      - ./redis/scripts/master-entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - ./redis/scripts/healthcheck-master.sh:/usr/local/bin/healthcheck.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/entrypoint.sh"]
+    ports:
+      - "${REDIS_MASTER_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "sh", "/usr/local/bin/healthcheck.sh"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+  # ═════════════════════════════ REDIS REPLICA 1 ═══════════════════════
+  redis-replica-1:
+    <<: *redis-base
+    container_name: redis-replica-1
+    hostname: redis-replica-1
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      REDIS_MAXMEMORY: ${REDIS_MAXMEMORY:-512mb}
+      MASTER_HOST: redis-master
+      MASTER_PORT: "6379"
+      REPLICA_PRIORITY: ${REDIS_REPLICA_1_PRIORITY:-100}
+    volumes:
+      - redis-replica1-data:/data
+      - ./redis/config/redis-replica.conf:/etc/redis/redis.conf:ro
+      - ./redis/scripts/replica-entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - ./redis/scripts/healthcheck-replica.sh:/usr/local/bin/healthcheck.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/entrypoint.sh"]
+    depends_on:
+      redis-master: { condition: service_healthy }
+    ports:
+      - "${REDIS_REPLICA_1_PORT:-6380}:6379"
+    healthcheck:
+      test: ["CMD", "sh", "/usr/local/bin/healthcheck.sh"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+  # ═════════════════════════════ REDIS REPLICA 2 ═══════════════════════
+  redis-replica-2:
+    <<: *redis-base
+    container_name: redis-replica-2
+    hostname: redis-replica-2
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      REDIS_MAXMEMORY: ${REDIS_MAXMEMORY:-512mb}
+      MASTER_HOST: redis-master
+      MASTER_PORT: "6379"
+      REPLICA_PRIORITY: ${REDIS_REPLICA_2_PRIORITY:-90}
+    volumes:
+      - redis-replica2-data:/data
+      - ./redis/config/redis-replica.conf:/etc/redis/redis.conf:ro
+      - ./redis/scripts/replica-entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - ./redis/scripts/healthcheck-replica.sh:/usr/local/bin/healthcheck.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/entrypoint.sh"]
+    depends_on:
+      redis-master: { condition: service_healthy }
+    ports:
+      - "${REDIS_REPLICA_2_PORT:-6381}:6379"
+    healthcheck:
+      test: ["CMD", "sh", "/usr/local/bin/healthcheck.sh"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+  # ═════════════════════════════ SENTINEL 1 ════════════════════════════
+  redis-sentinel-1:
+    <<: *sentinel-base
+    container_name: redis-sentinel-1
+    hostname: redis-sentinel-1
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      SENTINEL_PASSWORD: ${REDIS_SENTINEL_PASSWORD:?REDIS_SENTINEL_PASSWORD must be set}
+      SENTINEL_QUORUM: ${REDIS_SENTINEL_QUORUM:-2}
+      SENTINEL_DOWN_AFTER_MS: ${REDIS_SENTINEL_DOWN_AFTER_MS:-5000}
+      SENTINEL_FAILOVER_TIMEOUT_MS: ${REDIS_SENTINEL_FAILOVER_TIMEOUT_MS:-30000}
+      SENTINEL_PARALLEL_SYNCS: ${REDIS_SENTINEL_PARALLEL_SYNCS:-1}
+      SENTINEL_ANNOUNCE_IP: ${REDIS_SENTINEL_ANNOUNCE_IP:-}
+    volumes:
+      - redis-sentinel1-data:/data
+      - ./redis/scripts/sentinel-entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - ./redis/scripts/healthcheck-sentinel.sh:/usr/local/bin/healthcheck.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/entrypoint.sh"]
+    depends_on:
+      redis-master:    { condition: service_healthy }
+      redis-replica-1: { condition: service_healthy }
+      redis-replica-2: { condition: service_healthy }
+    ports:
+      - "${REDIS_SENTINEL_1_PORT:-26379}:26379"
+    healthcheck:
+      test: ["CMD", "sh", "/usr/local/bin/healthcheck.sh"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 25s
+
+  # ═════════════════════════════ SENTINEL 2 ════════════════════════════
+  redis-sentinel-2:
+    <<: *sentinel-base
+    container_name: redis-sentinel-2
+    hostname: redis-sentinel-2
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      SENTINEL_PASSWORD: ${REDIS_SENTINEL_PASSWORD:?REDIS_SENTINEL_PASSWORD must be set}
+      SENTINEL_QUORUM: ${REDIS_SENTINEL_QUORUM:-2}
+      SENTINEL_DOWN_AFTER_MS: ${REDIS_SENTINEL_DOWN_AFTER_MS:-5000}
+      SENTINEL_FAILOVER_TIMEOUT_MS: ${REDIS_SENTINEL_FAILOVER_TIMEOUT_MS:-30000}
+      SENTINEL_PARALLEL_SYNCS: ${REDIS_SENTINEL_PARALLEL_SYNCS:-1}
+      SENTINEL_ANNOUNCE_IP: ${REDIS_SENTINEL_ANNOUNCE_IP:-}
+    volumes:
+      - redis-sentinel2-data:/data
+      - ./redis/scripts/sentinel-entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - ./redis/scripts/healthcheck-sentinel.sh:/usr/local/bin/healthcheck.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/entrypoint.sh"]
+    depends_on:
+      redis-master:    { condition: service_healthy }
+      redis-replica-1: { condition: service_healthy }
+      redis-replica-2: { condition: service_healthy }
+    ports:
+      - "${REDIS_SENTINEL_2_PORT:-26380}:26379"
+    healthcheck:
+      test: ["CMD", "sh", "/usr/local/bin/healthcheck.sh"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 25s
+
+  # ═════════════════════════════ SENTINEL 3 ════════════════════════════
+  redis-sentinel-3:
+    <<: *sentinel-base
+    container_name: redis-sentinel-3
+    hostname: redis-sentinel-3
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      SENTINEL_PASSWORD: ${REDIS_SENTINEL_PASSWORD:?REDIS_SENTINEL_PASSWORD must be set}
+      SENTINEL_QUORUM: ${REDIS_SENTINEL_QUORUM:-2}
+      SENTINEL_DOWN_AFTER_MS: ${REDIS_SENTINEL_DOWN_AFTER_MS:-5000}
+      SENTINEL_FAILOVER_TIMEOUT_MS: ${REDIS_SENTINEL_FAILOVER_TIMEOUT_MS:-30000}
+      SENTINEL_PARALLEL_SYNCS: ${REDIS_SENTINEL_PARALLEL_SYNCS:-1}
+      SENTINEL_ANNOUNCE_IP: ${REDIS_SENTINEL_ANNOUNCE_IP:-}
+    volumes:
+      - redis-sentinel3-data:/data
+      - ./redis/scripts/sentinel-entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - ./redis/scripts/healthcheck-sentinel.sh:/usr/local/bin/healthcheck.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/entrypoint.sh"]
+    depends_on:
+      redis-master:    { condition: service_healthy }
+      redis-replica-1: { condition: service_healthy }
+      redis-replica-2: { condition: service_healthy }
+    ports:
+      - "${REDIS_SENTINEL_3_PORT:-26381}:26379"
+    healthcheck:
+      test: ["CMD", "sh", "/usr/local/bin/healthcheck.sh"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 25s
