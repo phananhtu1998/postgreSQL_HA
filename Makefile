@@ -14,7 +14,7 @@ ALL = $(COMPOSE) $(COMPOSE_CORE) $(COMPOSE_MON) $(COMPOSE_BAK) $(COMPOSE_DEV) $(
 .PHONY: help up up-monitoring up-backup up-dev up-all down down-all status logs \
         ps build rebuild patroni-list failover-test backup backup-full restore \
         psql-write psql-read clean nuke up-minio backup-s3 restore-s3 minio-console \
-        create-admin
+        create-admin redis-status redis-healthcheck redis-cli
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS=":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -97,3 +97,17 @@ clean: ## Stop containers (keeps volumes)
 
 nuke: ## DANGER: stop and remove all containers AND volumes (data loss)
 	$(ALL) down -v
+
+# ─── Redis Sentinel targets ───────────────────────────────────────────
+redis-status: ## Show Redis replication info from master
+	@. ./.env && docker exec redis-master redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning info replication | grep -E "^role|^connected_slaves|^slave[0-9]"
+
+redis-healthcheck: ## Full Redis cluster health: master role + sentinel discovery
+	@. ./.env && \
+	  echo "--- Redis Master role ---"; \
+	  docker exec redis-master redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning info replication | grep -E "^role|^connected_slaves|^slave[0-9]"; \
+	  echo ""; echo "--- Sentinel master discovery ---"; \
+	  docker exec redis-sentinel-1 redis-cli -p 26379 -a "$$REDIS_SENTINEL_PASSWORD" --no-auth-warning sentinel get-master-addr-by-name mymaster
+
+redis-cli: ## Open redis-cli against master
+	@. ./.env && docker exec -it redis-master redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning
