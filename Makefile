@@ -14,7 +14,7 @@ ALL = $(COMPOSE) $(COMPOSE_CORE) $(COMPOSE_MON) $(COMPOSE_BAK) $(COMPOSE_DEV) $(
 .PHONY: help up up-monitoring up-backup up-dev up-all down down-all status logs \
         ps build rebuild patroni-list failover-test backup backup-full restore \
         psql-write psql-read clean nuke up-minio backup-s3 restore-s3 minio-console \
-        create-admin redis-status redis-healthcheck redis-failover-test redis-cli
+        create-admin redis-status redis-healthcheck redis-cli
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS=":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
