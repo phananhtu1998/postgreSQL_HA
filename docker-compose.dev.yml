@@ -1,12 +1,12 @@
 # ════════════════════════════════════════════════════════════════════
-#  Dev overlay — pgAdmin.
+#  Dev overlay — pgAdmin + Redis Insight.
 #
 #  Mặc định bind 127.0.0.1 (chỉ truy cập từ máy host) để an toàn.
 #  Để truy cập từ ngoài (LAN/internet), trong .env set:
 #      PGADMIN_HOST=0.0.0.0
 #      PGADMIN_SERVER_MODE=True   # bật multi-user + login bắt buộc
-#  CẢNH BÁO: chỉ expose pgAdmin sau firewall/VPN, KHÔNG để 0.0.0.0
-#  trên public IP nếu không có TLS + reverse proxy.
+#  CẢNH BÁO: chỉ expose pgAdmin/Redis Insight sau firewall/VPN,
+#  KHÔNG để 0.0.0.0 trên public IP nếu không có TLS + reverse proxy.
 #
 #  Usage:
 #    docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
@@ -14,6 +14,7 @@
 
 volumes:
   pgadmin-data:
+  redis-insight-data:
 
 services:
   pgadmin:
@@ -34,3 +35,15 @@ services:
       - "${PGADMIN_HOST:-127.0.0.1}:${PGADMIN_PORT:-8080}:80"
     depends_on:
       pgbouncer: { condition: service_healthy }
+
+  redis-insight:
+    image: redis/redisinsight:2.68
+    container_name: redis-insight
+    restart: unless-stopped
+    networks: [pg-ha]
+    volumes:
+      - redis-insight-data:/data
+    ports:
+      - "${REDIS_INSIGHT_HOST:-127.0.0.1}:${REDIS_INSIGHT_PORT:-5540}:5540"
+    depends_on:
+      redis-master: { condition: service_healthy }
