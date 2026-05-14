@@ -107,7 +107,7 @@ redis-healthcheck: ## Full Redis cluster health: master role + sentinel discover
 	  echo "--- Redis Master role ---"; \
 	  docker exec redis-master redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning info replication | grep -E "^role|^connected_slaves|^slave[0-9]"; \
 	  echo ""; echo "--- Sentinel master discovery ---"; \
-	  docker exec redis-sentinel-1 redis-cli -p 26379 -a "$$REDIS_SENTINEL_PASSWORD" --no-auth-warning sentinel get-master-addr-by-name mymaster
+	  docker exec redis-sentinel-1 redis-cli -p 26379 -a "$$REDIS_SENTINEL_PASSWORD" --no-auth-warning sentinel get-master-addr-by-name "$${REDIS_SENTINEL_MASTER_NAME:-mymaster}"
 
 redis-cli: ## Open redis-cli against master
 	@. ./.env && docker exec -it redis-master redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning

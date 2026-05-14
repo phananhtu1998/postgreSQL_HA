@@ -431,6 +431,7 @@ Các biến **Redis Sentinel HA**:
 | `REDIS_SENTINEL_FAILOVER_TIMEOUT_MS` | `30000` | Tổng deadline cho failover (ms) |
 | `REDIS_SENTINEL_PARALLEL_SYNCS` | `1` | Số replica được reconfig song song sau promote (1 = an toàn nhất) |
 | `REDIS_SENTINEL_QUORUM` | `2` | Tối thiểu sentinel đồng ý master down. Luôn (N/2)+1 |
+| `REDIS_SENTINEL_MASTER_NAME` | `mymaster` | Tên sentinel group (master name). Client dùng tên này để discover master. Đổi nếu muốn tên dễ nhận biết hơn, ví dụ: `redisthaco` |
 | `REDIS_REPLICA_1_PRIORITY` | `100` | Replica priority — thấp hơn = ưu tiên promote (0 = không bao giờ) |
 | `REDIS_REPLICA_2_PRIORITY` | `90` | Replica 2 được ưu tiên promote hơn replica 1 |
 | `REDIS_SENTINEL_ANNOUNCE_IP` | *(trống)* | Chỉ cần nếu client ở NGOÀI docker network. Ví dụ: `192.168.1.50` |
@@ -670,7 +671,7 @@ Chuỗi kết nối Redis (sentinel-aware):
 
 ```text
 redis://:<REDIS_PASSWORD>@localhost:6379          # direct master
-redis-sentinel://localhost:26379,localhost:26380,localhost:26381/mymaster  # sentinel discovery
+redis-sentinel://localhost:26379,localhost:26380,localhost:26381/<SENTINEL_MASTER_NAME>  # sentinel discovery (mặc định: mymaster)
 ```
 
 App nên dùng sentinel-aware client để tự phát hiện master mới sau failover. Xem [Redis Sentinel HA](#redis-sentinel-ha) để biết cách kết nối từ code.
@@ -935,7 +936,7 @@ Sentinel-1 (:26379)  Sentinel-2 (:26380)  Sentinel-3 (:26381)
       └───────────────┘       └───────────────┘
 ```
 
-- **Sentinel group name**: `mymaster` (hardcoded, phù hợp với repo redis_sentinel gốc)
+- **Sentinel group name**: mặc định `mymaster`, đổi qua `REDIS_SENTINEL_MASTER_NAME` trong `.env`
 - **Quorum**: 2 — tối thiểu 2/3 sentinel đồng ý master down mới trigger failover
 - **Failover timeout**: 30s (tuỳ chỉnh qua `REDIS_SENTINEL_FAILOVER_TIMEOUT_MS`)
 - **Replica priority**: replica-2 (priority 90) được ưu tiên promote trước replica-1 (priority 100)
@@ -996,7 +997,7 @@ const redis = new Redis({
     { host: "localhost", port: 26380 },
     { host: "localhost", port: 26381 },
   ],
-  name: "mymaster",
+  name: process.env.REDIS_SENTINEL_MASTER_NAME || "mymaster",
   password: process.env.REDIS_PASSWORD || "CHANGE_ME",
   sentinelPassword: process.env.REDIS_SENTINEL_PASSWORD || "CHANGE_ME",
 });
@@ -1029,12 +1030,13 @@ sentinel = Sentinel(
 )
 
 # Lấy master connection
-master = sentinel.master_for("mymaster")
+master_name = os.getenv("REDIS_SENTINEL_MASTER_NAME", "mymaster")
+master = sentinel.master_for(master_name)
 master.set("hello", "world")
 print(master.get("hello"))  # b"world"
 
 # Lấy replica connection (chỉ đọc)
-replica = sentinel.slave_for("mymaster")
+replica = sentinel.slave_for(master_name)
 print(replica.get("hello"))  # b"world"
 ```
 
@@ -1069,7 +1071,7 @@ func main() {
 	}
 
 	rdb := redis.NewFailoverClient(&redis.FailoverOptions{
-		MasterName:       "mymaster",
+		MasterName:       os.Getenv("REDIS_SENTINEL_MASTER_NAME"), // mặc định "mymaster"
 		SentinelAddrs:    []string{"localhost:26379", "localhost:26380", "localhost:26381"},
 		Password:         password,
 		SentinelPassword: sentinelPassword,
@@ -1103,7 +1105,7 @@ export const redisProvider = {
         { host: "localhost", port: 26380 },
         { host: "localhost", port: 26381 },
       ],
-      name: "mymaster",
+      name: process.env.REDIS_SENTINEL_MASTER_NAME || "mymaster",
       password: process.env.REDIS_PASSWORD || "CHANGE_ME",
       sentinelPassword: process.env.REDIS_SENTINEL_PASSWORD || "CHANGE_ME",
     });
@@ -1152,7 +1154,7 @@ sleep 10
 # 4. Kiểm tra master mới — sentinel sẽ promote 1 replica
 docker exec redis-sentinel-1 redis-cli -p 26379 \
   -a "$REDIS_SENTINEL_PASSWORD" --no-auth-warning \
-  sentinel get-master-addr-by-name mymaster
+  sentinel get-master-addr-by-name $REDIS_SENTINEL_MASTER_NAME  # mặc định: mymaster
 
 # 5. Khởi động lại master cũ — tự rejoin làm replica
 docker start redis-master
