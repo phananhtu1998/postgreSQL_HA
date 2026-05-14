@@ -397,6 +397,8 @@ services:
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
       REDIS_MAXMEMORY: ${REDIS_MAXMEMORY:-512mb}
+      REDIS_ANNOUNCE_IP: ${REDIS_ANNOUNCE_IP:-}
+      REDIS_ANNOUNCE_PORT: ${REDIS_MASTER_PORT:-6379}
     volumes:
       - redis-master-data:/data
       - ./redis/config/redis-master.conf:/etc/redis/redis.conf:ro
@@ -423,6 +425,8 @@ services:
       MASTER_HOST: redis-master
       MASTER_PORT: "6379"
       REPLICA_PRIORITY: ${REDIS_REPLICA_1_PRIORITY:-100}
+      REDIS_ANNOUNCE_IP: ${REDIS_ANNOUNCE_IP:-}
+      REDIS_ANNOUNCE_PORT: ${REDIS_REPLICA_1_PORT:-6380}
     volumes:
       - redis-replica1-data:/data
       - ./redis/config/redis-replica.conf:/etc/redis/redis.conf:ro
@@ -451,6 +455,8 @@ services:
       MASTER_HOST: redis-master
       MASTER_PORT: "6379"
       REPLICA_PRIORITY: ${REDIS_REPLICA_2_PRIORITY:-90}
+      REDIS_ANNOUNCE_IP: ${REDIS_ANNOUNCE_IP:-}
+      REDIS_ANNOUNCE_PORT: ${REDIS_REPLICA_2_PORT:-6381}
     volumes:
       - redis-replica2-data:/data
       - ./redis/config/redis-replica.conf:/etc/redis/redis.conf:ro
@@ -481,6 +487,7 @@ services:
       SENTINEL_FAILOVER_TIMEOUT_MS: ${REDIS_SENTINEL_FAILOVER_TIMEOUT_MS:-30000}
       SENTINEL_PARALLEL_SYNCS: ${REDIS_SENTINEL_PARALLEL_SYNCS:-1}
       SENTINEL_ANNOUNCE_IP: ${REDIS_SENTINEL_ANNOUNCE_IP:-}
+      SENTINEL_ANNOUNCE_PORT: ${REDIS_SENTINEL_1_PORT:-26379}
     volumes:
       - redis-sentinel1-data:/data
       - ./redis/scripts/sentinel-entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
@@ -512,6 +519,7 @@ services:
       SENTINEL_FAILOVER_TIMEOUT_MS: ${REDIS_SENTINEL_FAILOVER_TIMEOUT_MS:-30000}
       SENTINEL_PARALLEL_SYNCS: ${REDIS_SENTINEL_PARALLEL_SYNCS:-1}
       SENTINEL_ANNOUNCE_IP: ${REDIS_SENTINEL_ANNOUNCE_IP:-}
+      SENTINEL_ANNOUNCE_PORT: ${REDIS_SENTINEL_2_PORT:-26380}
     volumes:
       - redis-sentinel2-data:/data
       - ./redis/scripts/sentinel-entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
@@ -543,6 +551,7 @@ services:
       SENTINEL_FAILOVER_TIMEOUT_MS: ${REDIS_SENTINEL_FAILOVER_TIMEOUT_MS:-30000}
       SENTINEL_PARALLEL_SYNCS: ${REDIS_SENTINEL_PARALLEL_SYNCS:-1}
       SENTINEL_ANNOUNCE_IP: ${REDIS_SENTINEL_ANNOUNCE_IP:-}
+      SENTINEL_ANNOUNCE_PORT: ${REDIS_SENTINEL_3_PORT:-26381}
     volumes:
       - redis-sentinel3-data:/data
       - ./redis/scripts/sentinel-entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
