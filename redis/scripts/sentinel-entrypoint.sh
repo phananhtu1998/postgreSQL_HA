@@ -12,6 +12,7 @@ set -eu
 : "${SENTINEL_FAILOVER_TIMEOUT_MS:=30000}"
 : "${SENTINEL_PARALLEL_SYNCS:=1}"
 : "${SENTINEL_ANNOUNCE_IP:=}"
+: "${SENTINEL_ANNOUNCE_PORT:=}"
 
 SENTINEL_CONF="/data/sentinel.conf"
 
@@ -34,9 +35,14 @@ if [ ! -f "$SENTINEL_CONF" ]; then
     echo ""
     echo "# DNS / hostname resolution"
     echo "sentinel resolve-hostnames yes"
-    echo "sentinel announce-hostnames yes"
     if [ -n "$SENTINEL_ANNOUNCE_IP" ]; then
+      echo "sentinel announce-hostnames no"
       echo "sentinel announce-ip $SENTINEL_ANNOUNCE_IP"
+    else
+      echo "sentinel announce-hostnames yes"
+    fi
+    if [ -n "$SENTINEL_ANNOUNCE_PORT" ]; then
+      echo "sentinel announce-port $SENTINEL_ANNOUNCE_PORT"
     fi
     echo ""
     echo "# Hardening"
@@ -50,7 +56,7 @@ else
 fi
 
 TMP_CONF="${SENTINEL_CONF}.tmp"
-grep -vE '^(requirepass|user default|sentinel auth-pass mymaster|sentinel down-after-milliseconds mymaster|sentinel failover-timeout mymaster|sentinel parallel-syncs mymaster|sentinel resolve-hostnames|sentinel announce-hostnames|sentinel announce-ip|sentinel deny-scripts-reconfig)( |$)' \
+grep -vE '^(requirepass|user default|sentinel auth-pass mymaster|sentinel down-after-milliseconds mymaster|sentinel failover-timeout mymaster|sentinel parallel-syncs mymaster|sentinel resolve-hostnames|sentinel announce-hostnames|sentinel announce-ip|sentinel announce-port|sentinel deny-scripts-reconfig)( |$)' \
   "$SENTINEL_CONF" > "$TMP_CONF"
 mv "$TMP_CONF" "$SENTINEL_CONF"
 
@@ -67,9 +73,14 @@ fi
   echo "sentinel failover-timeout mymaster $SENTINEL_FAILOVER_TIMEOUT_MS"
   echo "sentinel parallel-syncs mymaster $SENTINEL_PARALLEL_SYNCS"
   echo "sentinel resolve-hostnames yes"
-  echo "sentinel announce-hostnames yes"
   if [ -n "$SENTINEL_ANNOUNCE_IP" ]; then
+    echo "sentinel announce-hostnames no"
     echo "sentinel announce-ip $SENTINEL_ANNOUNCE_IP"
+  else
+    echo "sentinel announce-hostnames yes"
+  fi
+  if [ -n "$SENTINEL_ANNOUNCE_PORT" ]; then
+    echo "sentinel announce-port $SENTINEL_ANNOUNCE_PORT"
   fi
   echo "sentinel deny-scripts-reconfig yes"
 } >> "$SENTINEL_CONF"

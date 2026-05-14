@@ -433,7 +433,8 @@ Các biến **Redis Sentinel HA**:
 | `REDIS_SENTINEL_QUORUM` | `2` | Tối thiểu sentinel đồng ý master down. Luôn (N/2)+1 |
 | `REDIS_REPLICA_1_PRIORITY` | `100` | Replica priority — thấp hơn = ưu tiên promote (0 = không bao giờ) |
 | `REDIS_REPLICA_2_PRIORITY` | `90` | Replica 2 được ưu tiên promote hơn replica 1 |
-| `REDIS_SENTINEL_ANNOUNCE_IP` | *(trống)* | Chỉ cần nếu client ở NGOÀI docker network. Ví dụ: `192.168.1.50` |
+| `REDIS_ANNOUNCE_IP` | *(trống)* | IP quảng bá cho Redis nodes (master + replicas) khi client ở NGOÀI Docker. Ví dụ: `10.14.80.7` |
+| `REDIS_SENTINEL_ANNOUNCE_IP` | *(trống)* | IP quảng bá cho Sentinel nodes khi client ở NGOÀI Docker. Thường cùng giá trị `REDIS_ANNOUNCE_IP` |
 
 Các biến **pgAdmin + Redis Insight** (overlay dev):
 
@@ -1011,6 +1012,67 @@ console.log(val); // "world"
 ```
 
 > **Lưu ý**: nếu Redis chạy trong Docker và app chạy ngoài Docker trên cùng host, dùng `localhost` với các port đã bind (6379, 26379-26381). Nếu app cũng chạy trong Docker cùng network `pg-ha`, dùng tên service: `redis-master`, `redis-sentinel-1`, v.v.
+
+#### Kết nối từ máy khác (external — ngoài Docker host)
+
+Khi app chạy trên máy khác (ví dụ Windows) cùng LAN với server Docker, sentinel mặc định trả về hostname nội bộ Docker (`redis-master`) — máy Windows không resolve được → lỗi `Failed to resolve hostname`.
+
+**Giải pháp: cấu hình announce-ip**
+
+Thêm vào `.env`:
+
+```env
+# IP của server chạy Docker (không phải localhost)
+REDIS_ANNOUNCE_IP=10.14.80.7
+REDIS_SENTINEL_ANNOUNCE_IP=10.14.80.7
+```
+
+Rebuild:
+
+```bash
+# Xóa sentinel data cũ để tạo config mới với announce-ip
+docker compose down
+docker volume rm $(docker volume ls -q | grep sentinel)
+docker compose up -d --build
+```
+
+Sau khi set announce-ip, sentinel sẽ trả về IP `10.14.80.7` thay vì `redis-master`, và client trên Windows có thể kết nối bình thường:
+
+```js
+// Node.js trên Windows (ioredis)
+const Redis = require("ioredis");
+
+const redis = new Redis({
+  sentinels: [
+    { host: "10.14.80.7", port: 26379 },
+    { host: "10.14.80.7", port: 26380 },
+    { host: "10.14.80.7", port: 26381 },
+  ],
+  name: "mymaster",
+  password: "your_redis_password",
+  sentinelPassword: "your_sentinel_password",
+});
+
+redis.on("connect", () => console.log("Connected!"));
+redis.on("error", (err) => console.error("Error:", err));
+```
+
+```python
+# Python trên Windows (redis-py)
+from redis.sentinel import Sentinel
+
+sentinel = Sentinel(
+    [("10.14.80.7", 26379), ("10.14.80.7", 26380), ("10.14.80.7", 26381)],
+    sentinel_kwargs={"password": "your_sentinel_password"},
+    password="your_redis_password",
+)
+
+master = sentinel.master_for("mymaster")
+master.set("hello", "world")
+print(master.get("hello"))  # b"world"
+```
+
+> **Quan trọng**: Port trong code phải khớp với port đã bind trên host (`REDIS_SENTINEL_1_PORT`, `REDIS_SENTINEL_2_PORT`, `REDIS_SENTINEL_3_PORT` trong `.env`). Ví dụ nếu `.env` có `REDIS_SENTINEL_1_PORT=36479` thì dùng port `36479` trong code.
 
 **Python** (redis-py):
 
@@ -2209,6 +2271,15 @@ Xem log tập trung:
 
 ```bat
 make.bat logs
+```
+
+Sentinel-aware client báo `Failed to resolve hostname 'redis-master'` hoặc `All sentinels are unreachable`:
+
+```text
+Nguyên nhân: app chạy ngoài Docker, sentinel trả về hostname nội bộ Docker.
+Giải pháp: set REDIS_ANNOUNCE_IP và REDIS_SENTINEL_ANNOUNCE_IP trong .env
+bằng IP server chạy Docker, xóa sentinel volume cũ, rebuild.
+Xem chi tiết: phần "Kết nối từ máy khác (external)" trong README.
 ```
 
 Build lại sạch khi nghi lỗi line ending hoặc image cũ:
