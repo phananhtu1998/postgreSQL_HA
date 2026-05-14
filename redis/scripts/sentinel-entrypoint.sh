@@ -14,6 +14,21 @@ set -eu
 : "${SENTINEL_ANNOUNCE_IP:=}"
 : "${SENTINEL_ANNOUNCE_PORT:=}"
 
+: "${REDIS_MASTER_ANNOUNCE_IP:=}"
+: "${REDIS_MASTER_ANNOUNCE_PORT:=6379}"
+
+# Determine master address for sentinel monitor:
+# If REDIS_MASTER_ANNOUNCE_IP is set (external client scenario), sentinel
+# monitors master via external IP:port so it reports the correct address
+# to clients outside Docker. Otherwise use Docker hostname.
+if [ -n "$REDIS_MASTER_ANNOUNCE_IP" ]; then
+  MONITOR_HOST="$REDIS_MASTER_ANNOUNCE_IP"
+  MONITOR_PORT="$REDIS_MASTER_ANNOUNCE_PORT"
+else
+  MONITOR_HOST="redis-master"
+  MONITOR_PORT="6379"
+fi
+
 SENTINEL_CONF="/data/sentinel.conf"
 
 if [ ! -f "$SENTINEL_CONF" ]; then
@@ -27,7 +42,7 @@ if [ ! -f "$SENTINEL_CONF" ]; then
     echo "requirepass $SENTINEL_PASSWORD"
     echo ""
     echo "# Master to monitor"
-    echo "sentinel monitor mymaster redis-master 6379 $SENTINEL_QUORUM"
+    echo "sentinel monitor mymaster $MONITOR_HOST $MONITOR_PORT $SENTINEL_QUORUM"
     echo "sentinel auth-pass mymaster $REDIS_PASSWORD"
     echo "sentinel down-after-milliseconds mymaster $SENTINEL_DOWN_AFTER_MS"
     echo "sentinel failover-timeout mymaster $SENTINEL_FAILOVER_TIMEOUT_MS"
@@ -61,7 +76,7 @@ grep -vE '^(requirepass|user default|sentinel auth-pass mymaster|sentinel down-a
 mv "$TMP_CONF" "$SENTINEL_CONF"
 
 if ! grep -qE '^sentinel monitor mymaster ' "$SENTINEL_CONF"; then
-  echo "sentinel monitor mymaster redis-master 6379 $SENTINEL_QUORUM" >> "$SENTINEL_CONF"
+  echo "sentinel monitor mymaster $MONITOR_HOST $MONITOR_PORT $SENTINEL_QUORUM" >> "$SENTINEL_CONF"
 fi
 
 {
